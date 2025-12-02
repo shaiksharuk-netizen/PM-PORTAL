@@ -10,6 +10,7 @@ from pathlib import Path
 import uuid
 from datetime import datetime
 from dotenv import load_dotenv
+import requests
 
 from models import Base, Feedback, UploadedFile, MandatoryFile, ProjectKnowledgeBaseFile, ChatMessage, Conversation, Project, get_db, engine
 from schemas import (
@@ -81,9 +82,195 @@ app.add_middleware(
 )
 
 @app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {"message": "PM Portal Bot API", "status": "running"}
+async def root_entry(
+    request: FastAPIRequest,
+    email: str = None,
+    token: str = None,
+    format: str = None,
+    db: Session = Depends(get_db)
+):
+    """Root entry point for landing page integration with Google OAuth token validation.
+    
+    This endpoint accepts email and Google OAuth access_token from the landing page:
+    - Validates the token with Google's tokeninfo endpoint
+    - Ensures email matches and email is verified
+    - Creates/fetches user and session
+    - Redirects to frontend (browser) or returns JSON (API client)
+    
+    Usage:
+        Browser: GET /?email=user@forsysinc.com&token=<GOOGLE_ACCESS_TOKEN>
+        API: GET /?email=user@forsysinc.com&token=<GOOGLE_ACCESS_TOKEN>&format=json
+    
+    Parameters:
+        - email: User email address (required)
+        - token: Google OAuth access_token (required)
+        - format: If 'json', forces JSON response (for API clients)
+    """
+    # Step 1: Validate required parameters
+    if not email or not token:
+        print(f"[AUTH] Root entry login failed: missing email or token")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "session_id": None,
+                "user": None,
+                "message": "Both email and token parameters are required. Usage: /?email=user@forsysinc.com&token=<GOOGLE_ACCESS_TOKEN>"
+            }
+        )
+    
+    email_lower = email.strip().lower()
+    print(f"[AUTH] Root entry login requested with email={email_lower}")
+    
+    try:
+        # Step 2: Validate token with Google tokeninfo endpoint
+        tokeninfo_url = "https://www.googleapis.com/oauth2/v1/tokeninfo"
+        try:
+            tokeninfo_response = requests.get(
+                tokeninfo_url,
+                params={"access_token": token},
+                timeout=5
+            )
+            
+            if tokeninfo_response.status_code != 200:
+                print(f"[AUTH] Tokeninfo validation failed: HTTP {tokeninfo_response.status_code}")
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "success": False,
+                        "session_id": None,
+                        "user": None,
+                        "message": "Invalid or expired token. Please try logging in again."
+                    }
+                )
+            
+            tokeninfo_data = tokeninfo_response.json()
+            
+            # Check for error in tokeninfo response
+            if "error" in tokeninfo_data:
+                error_description = tokeninfo_data.get("error_description", "Unknown error")
+                print(f"[AUTH] Tokeninfo validation failed: {error_description}")
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "success": False,
+                        "session_id": None,
+                        "user": None,
+                        "message": f"Token validation failed: {error_description}"
+                    }
+                )
+            
+        except requests.exceptions.RequestException as e:
+            print(f"[AUTH] Tokeninfo request error: {str(e)}")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "session_id": None,
+                    "user": None,
+                    "message": "Unable to validate token with Google. Please try again later."
+                }
+            )
+        except ValueError as e:
+            print(f"[AUTH] Tokeninfo JSON parsing error: {str(e)}")
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "success": False,
+                    "session_id": None,
+                    "user": None,
+                    "message": "Invalid token response from Google."
+                }
+            )
+        
+        # Step 3: Extract and validate tokeninfo data
+        token_email = tokeninfo_data.get("email", "").strip().lower()
+        verified_email = tokeninfo_data.get("verified_email", False)
+        
+        # Step 4: Validate email match
+        if token_email != email_lower:
+            print(f"[AUTH] Tokeninfo validation failed: email mismatch. Query email={email_lower}, Token email={token_email}")
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "session_id": None,
+                    "user": None,
+                    "message": "Email mismatch. The email in the token does not match the provided email."
+                }
+            )
+        
+        # Step 5: Validate verified_email
+        if not verified_email:
+            print(f"[AUTH] Tokeninfo validation failed: email not verified for email={email_lower}")
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "session_id": None,
+                    "user": None,
+                    "message": "Email is not verified. Please use a verified Google account."
+                }
+            )
+        
+        # Note: We don't validate audience/client_id because the token may come from
+        # a different OAuth client (e.g., the landing page). As long as the token
+        # is valid from Google and the email matches and is verified, we accept it.
+        
+        print(f"[AUTH] Tokeninfo validation passed for email={email_lower}")
+        
+        # Step 7: Use existing auth service to create/fetch user and session
+        result = auth_service.login_by_email(email=email_lower, name=None, db=db)
+        
+        if not result.success:
+            print(f"[AUTH] Root entry login failed after token validation: {result.message}")
+            response = JSONResponse(content=result.dict())
+            _clear_session_cookie(response)
+            return response
+        
+        print(f"[AUTH] Root entry login successful for: {email_lower}")
+        
+        # Step 8: Determine if we should redirect or return JSON
+        # Check Accept header to detect browser vs API client
+        accept_header = request.headers.get("Accept", "")
+        is_browser_request = (
+            "text/html" in accept_header or 
+            accept_header == "" or
+            "*/*" in accept_header
+        )
+        
+        # Force JSON if format=json parameter is set (for API clients like Postman)
+        should_return_json = (format and format.lower() == 'json') or (
+            not is_browser_request
+        )
+        
+        # Step 9: Redirect to frontend or return JSON
+        if not should_return_json:
+            frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+            redirect_url = f"{frontend_url}/"
+            response = RedirectResponse(url=redirect_url, status_code=302)
+            _set_session_cookie(response, result.session_id)
+            print(f"[AUTH] Redirecting to frontend root: {redirect_url}")
+            return response
+        else:
+            # Return JSON response for API calls (like Postman)
+            response = JSONResponse(content=result.dict())
+            _set_session_cookie(response, result.session_id)
+            return response
+            
+    except Exception as e:
+        print(f"[AUTH] Root entry login error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "session_id": None,
+                "user": None,
+                "message": f"Internal server error during authentication: {str(e)}"
+            }
+        )
 
 # Static file serving endpoint for mandatory files (by ID)
 @app.get("/api/mandatory-files/{file_id}/download")
@@ -904,14 +1091,11 @@ async def login_by_email(
             # If redirect is explicitly requested OR it's a browser request, redirect to frontend
             if not should_return_json:
                 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-                # Redirect to email-login route which will handle the session properly
-                # This ensures localStorage is set and user state is properly initialized
-                redirect_url = f"{frontend_url}/email-login?email={email}"
-                if name:
-                    redirect_url += f"&name={name}"
+                # Redirect to frontend root page after successful login
+                redirect_url = f"{frontend_url}/"
                 response = RedirectResponse(url=redirect_url, status_code=302)
                 _set_session_cookie(response, result.session_id)
-                print(f"[AUTH] Redirecting to frontend email-login: {redirect_url}")
+                print(f"[AUTH] Redirecting to frontend root: {redirect_url}")
                 return response
             else:
                 # Return JSON response for API calls (like Postman)
