@@ -27,8 +27,8 @@ class GeminiService:
         # Track current API key index and usage
         self.current_key_index = 0
         self.current_api_key = self.api_keys[0]
-        self.model = "gemini-2.0-flash"
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+        self.model = "gemini-2.5-flash"
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         
         print(f"🔑 [GEMINI SERVICE] Initialized with {len(self.api_keys)} API key(s)")
         print(f"🔑 [GEMINI SERVICE] Using API key #{self.current_key_index + 1}")

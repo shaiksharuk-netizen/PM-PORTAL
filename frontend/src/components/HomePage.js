@@ -65,12 +65,19 @@ const HomePage = () => {
   const [showProjectsView, setShowProjectsView] = useState(false); // Track if projects view is shown
   const [projects, setProjects] = useState([]); // Store projects with nested conversations
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false); // Show create project modal
+  const [showFileSourceModal, setShowFileSourceModal] = useState(false); // Show file source selection modal (Local/GDrive)
   const [projectName, setProjectName] = useState(''); // Project name input
   const [isCreatingProject, setIsCreatingProject] = useState(false); // Loading state for creating project
   const [expandedProjects, setExpandedProjects] = useState(new Set()); // Track which projects are expanded
   const [activeProjectId, setActiveProjectId] = useState(null); // Active project ID
   const [activeConversationId, setActiveConversationId] = useState(null); // Active conversation ID
   const [currentProject, setCurrentProject] = useState(null); // Current project info for header
+  
+  // Compute active project from projects array
+  const activeProject = useMemo(() => {
+    if (!activeProjectId) return null;
+    return projects.find(p => p.id === activeProjectId) || currentProject;
+  }, [activeProjectId, projects, currentProject]);
   
   const createChatId = useCallback(() => {
     if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
@@ -2134,19 +2141,31 @@ const HomePage = () => {
       
       {showProfilePopup && <ProfilePopup />}
 
-      {/* Top Right Logout Button */}
-      <button 
-        className="header-logout-btn"
-        onClick={handleLogout}
-        title="Logout"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          <polyline points="16,17 21,12 16,7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          <line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        <span>Logout</span>
-      </button>
+      {/* Top Right Back and Logout Buttons */}
+      <div className="header-buttons-container">
+        <button 
+          className="header-back-btn"
+          onClick={() => navigate(-1)}
+          title="Go Back"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <span>Back</span>
+        </button>
+        <button 
+          className="header-logout-btn"
+          onClick={handleLogout}
+          title="Logout"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <polyline points="16,17 21,12 16,7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <span>Logout</span>
+        </button>
+      </div>
 
       {/* Floating Chat Icon and Expanded Chat UI */}
       <div className="chat-panel-container">
@@ -2206,7 +2225,7 @@ const HomePage = () => {
                     aria-label="Mandatory Files"
                     title="Mandatory Files"
                   >
-                    <span>Importent Files </span>
+                    <span>Templates</span>
                   </button>
                   {showMandatoryFilesDropdown && (() => {
                     // Check if user is admin - check role and email
@@ -2233,7 +2252,7 @@ const HomePage = () => {
                           className="mandatory-file-add-btn"
                           onClick={(e) => {
                             e.stopPropagation();
-                            document.getElementById('mandatory-file-upload').click();
+                            setShowFileSourceModal(true);
                           }}
                           disabled={uploadingFile}
                         >
@@ -2637,17 +2656,6 @@ const HomePage = () => {
                   </div>
                 ) : null}
                 
-                {/* Chat Label Section */}
-                <div className="chat-section-label">
-                  <h3>Chats</h3>
-                </div>
-                <div className="chat-current-session-wrapper">
-                  <div className="chat-current-session-tile">
-                    <div className="chat-current-session-title">{currentChatTileLabel}</div>
-                    <div className="chat-current-session-subtitle">Current chat</div>
-                  </div>
-                </div>
-
                 {/* Chats List Section */}
                 <div className="chat-history-middle-section">
                   <div className="chat-history-header">
@@ -2713,14 +2721,14 @@ const HomePage = () => {
               
               {/* Chat Content Area */}
               <div className="chat-expanded-content" style={{ flex: 1 }}>
-                {/* Project Header - Show when viewing a project conversation */}
-                {currentProject && !showProjectsView && (
+                {/* Project Header - Show only when project is active and no messages yet */}
+                {activeProject && !showProjectsView && chatMessages.length === 0 && (
                   <div className="project-conversation-header">
                     <div className="project-conversation-header-content">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="project-header-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="project-header-icon">
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" stroke="currentColor" strokeWidth="2"/>
                       </svg>
-                      <span className="project-header-name">{currentProject.name}</span>
+                      <span className="project-header-name">{activeProject.name}</span>
                     </div>
                   </div>
                 )}
@@ -3079,6 +3087,55 @@ const HomePage = () => {
                 disabled={!projectName.trim()}
               >
                 Create project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Source Selection Modal */}
+      {showFileSourceModal && (
+        <div className="file-source-modal-overlay" onClick={() => setShowFileSourceModal(false)}>
+          <div className="file-source-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="file-source-modal-title">Select the file on which you want me to work on!</h2>
+            <div className="file-source-options">
+              <button 
+                className="file-source-option"
+                onClick={() => {
+                  // TODO: Implement Google Drive picker
+                  alert('Google Drive integration coming soon!');
+                  setShowFileSourceModal(false);
+                }}
+              >
+                <div className="file-source-icon gdrive-icon">
+                  <svg width="28" height="28" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6.6 66.85L29.2 27.95l22.6 38.9z" fill="#0066da"/>
+                    <path d="M58.2 66.85L80.7 28.05l-22.6-.1z" fill="#00ac47"/>
+                    <path d="M29.2 27.95L51.8 66.85h28.9L58.1 28.05z" fill="#ea4335"/>
+                    <path d="M29.2 27.95h22.6L80.7 28l-22.5-27.9z" fill="#00832d"/>
+                    <path d="M6.6 66.85L29.2 27.95 6.7 28.05z" fill="#2684fc"/>
+                    <path d="M51.8 66.85L29.2 27.95h-22.5L29.2 0.1z" fill="#ffba00"/>
+                  </svg>
+                </div>
+                <span className="file-source-name">Google Drive</span>
+                <span className="file-source-desc">Access from Drive</span>
+              </button>
+              <button 
+                className="file-source-option active"
+                onClick={() => {
+                  setShowFileSourceModal(false);
+                  document.getElementById('mandatory-file-upload').click();
+                }}
+              >
+                <div className="file-source-icon local-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="#3b6eb5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <polyline points="17,8 12,3 7,8" stroke="#3b6eb5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <line x1="12" y1="3" x2="12" y2="15" stroke="#3b6eb5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <span className="file-source-name">Local Upload</span>
+                <span className="file-source-desc">Upload from computer</span>
               </button>
             </div>
           </div>
