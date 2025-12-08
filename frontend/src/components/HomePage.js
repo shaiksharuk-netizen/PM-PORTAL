@@ -2734,7 +2734,7 @@ const HomePage = () => {
                 )}
                 {showProjectsView ? (
                   <>
-                    <div className="projects-backdrop" onClick={() => setShowProjectsView(false)}></div>
+                    <div className="projects-backdrop" onClick={() => window.location.href = "https://dataagentproject-1.onrender.com"}></div>
                     <div className="projects-view-container">
                       <div className="project-create-window">
                         <div className="project-create-header">
