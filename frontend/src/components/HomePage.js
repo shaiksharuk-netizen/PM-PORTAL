@@ -2682,7 +2682,9 @@ const pickerCallback = useCallback((data, userEmail) => {
       <div className="header-buttons-container">
         <button 
           className="header-back-btn"
-          onClick={() => navigate(-1)}
+          onClick={() => {
+          window.location.href = `${process.env.REACT_APP_BASE_FRONTEND_URL}`;
+        }}
           title="Go Back"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
