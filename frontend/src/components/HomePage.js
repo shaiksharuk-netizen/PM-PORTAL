@@ -17,6 +17,7 @@ const FASTAPI_DRIVE_UPLOAD_URL = process.env.REACT_APP_API_URL + '/api/upload-fr
 let accessToken = ''; // Global variable to h
 // old the OAuth token
 let pickerApiLoaded = false;
+let chatDriveAccessToken = ''; // <--- NEW: Dedicated token for Chat Drive Picker
 // ... (rest of the global functions are fine)
 
 // 1. Initialization and Loading Check
@@ -538,6 +539,205 @@ const fetchMandatoryFiles = useCallback(async () => { // <--- ADDED useCallback
 //         }
 //     }, 100); 
 // 1. OAuth Handler for the Drive Button Click (FINAL ROBUST VERSION)
+
+
+
+
+// 4. UPDATED: Direct Handler to fix COOP/Popup blocking issues
+const openChatDrivePicker = useCallback((e) => {
+    if (e) e.stopPropagation();
+
+    // 1. Mandatory Readiness Check
+    if (!user?.email || !isPickerReady) {
+        alert("Google Drive services are still loading. Please wait a moment.");
+        return;
+    }
+
+    if (!GOOGLE_CLIENT_ID || !DEVELOPER_API_KEY) {
+        alert("Configuration Error: Google Client ID or API Key missing.");
+        return;
+    }
+    
+    // --- SCENARIO A: Token is already in memory ---
+    if (chatDriveAccessToken) {
+        console.log("Chat Token available. Launching Picker.");
+        createChatDrivePicker(user.email);
+        return;
+    }
+    
+    // --- SCENARIO B: Request Token directly (Fixes the COOP/Silent loop error) ---
+    console.log("Initiating Google Login for Chat Drive...");
+    
+    const client = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: DRIVE_SCOPES,
+        callback: (tokenResponse) => {
+            if (tokenResponse && tokenResponse.access_token) {
+                chatDriveAccessToken = tokenResponse.access_token;
+                console.log("✅ Token received. Launching Picker.");
+                createChatDrivePicker(user.email); 
+            } else if (tokenResponse.error) {
+                console.error("Token error:", tokenResponse.error);
+            }
+        },
+    });
+
+    // This opens the popup directly, which is more reliable for local development
+    client.requestAccessToken(); 
+
+}, [isPickerReady, user?.email]);
+
+
+/*******************************************************
+ * CHAT GOOGLE DRIVE PICKER CORE LOGIC
+ * This ensures folder browsing but prevents folder selection.
+ *******************************************************/
+
+// 1. Function to create the Google Picker for Chat
+function createChatDrivePicker(userEmail) {
+  if (!window.google || !window.google.picker || !chatDriveAccessToken) {
+    console.error("Chat Picker not fully ready or token missing.");
+    return;
+  }
+
+  // CRITICAL: Configure the DocsView
+  const view = new window.google.picker.DocsView()
+    // Show folders in the list, allowing navigation (user can double-click)
+    .setIncludeFolders(true)          
+    // IMPORTANT: Disables the ability to select the folder itself (only files are selectable)
+    .setSelectFolderEnabled(false); 
+
+  // Restrict to file types compatible with your current ingestion logic
+  view.setMimeTypes(
+    'application/pdf,' +
+    'application/vnd.google-apps.document,' +
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
+    'application/vnd.google-apps.spreadsheet,' +
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,' +
+    'text/plain,' +
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  );
+
+  const picker = new window.google.picker.PickerBuilder()
+    .setAppId(window.google.picker.PickerBuilder.GOOGLE_DOCS_APP_ID)
+    .setOAuthToken(chatDriveAccessToken)
+    .setDeveloperKey(DEVELOPER_API_KEY)
+    .addView(view)
+    .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED) // Enable multiple file selection
+    .setCallback(chatDrivePickerCallback) // Use new, chat-specific callback
+    .build();
+
+  picker.setVisible(true);
+}
+
+
+// 2. Callback function triggered once files are selected (Sends to /api/process-multi-files)
+const uploadChatDriveFiles = async (files) => {
+    if (!files.length) return;
+
+    // Display file names in chat immediately for better UX
+    files.forEach(file => {
+      const fileMessage = {
+        text: `📎 ${file.name} (from Drive)`,
+        type: 'user',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isFile: true
+      };
+      setChatMessages(prev => [...prev, fileMessage]);
+    });
+
+    try {
+      // NOTE: This assumes your backend has the /api/process-multi-files endpoint ready 
+      // to handle {source: "google_drive"} and the access token (we will verify this in the backend step).
+      const response = await fetch("/api/process-multi-files", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Pass the token to the backend for file download
+          Authorization: `Bearer ${chatDriveAccessToken}` 
+        },
+        body: JSON.stringify({
+          source: "google_drive", // CRITICAL: Identify source for backend
+          files: files.map(f => ({
+            drive_file_id: f.id, // Backend needs the drive ID
+            name: f.name,
+            mime_type: f.mimeType
+          })),
+          user_email: user.email // Pass user email
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Drive upload failed");
+      }
+
+      // Display success/failure messages in the chat
+      if (result.success && result.uploaded_file_ids) {
+        // Update state to track these files (they will override playbook for subsequent questions)
+        setUploadedFileIds(prev => [
+          ...prev,
+          ...result.uploaded_file_ids
+        ]);
+        setUploadedFileId(result.uploaded_file_ids[result.uploaded_file_ids.length - 1] || null);
+        
+        const successCount = result.uploaded_file_ids.length;
+        
+        const summaryMessage = {
+            text: `✅ ${successCount}/${files.length} file(s) from Drive processed successfully! You can now ask questions about these documents.`,
+            type: 'bot',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        setChatMessages(prev => [...prev, summaryMessage]);
+
+        // Crucial: Clear playbook when files are uploaded to chat
+        setPlaybookFileIds([]); 
+        localStorage.removeItem('playbookFileIds'); 
+      } else {
+        const errorMessage = {
+            text: result.error ? `❌ Drive processing error: ${result.error}` : "❌ Drive processing failed: Invalid response from server.",
+            type: 'bot',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        setChatMessages(prev => [...prev, errorMessage]);
+      }
+
+    } catch (err) {
+      console.error("Chat Drive upload error:", err);
+      const errorMessage = {
+          text: `❌ Error communicating with server: ${err.message}. Please check console.`,
+          type: 'bot',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+    }
+}
+
+// 3. Main callback function from the Picker
+function chatDrivePickerCallback(data) {
+    // Only proceed if the action was a selection
+    if (data.action !== window.google.picker.Action.PICKED) {
+        console.log("Chat Drive Picker closed by user or cancelled.");
+        return;
+    }
+
+    // Only process Docs (files), ignore other types returned by picker (like folder entries)
+    const files = data.docs.filter(doc => doc.type === 'document' || doc.type === 'file' || doc.is_document);
+
+    if (!files.length) {
+        const warningMessage = {
+            text: "⚠️ No supported files were selected. Please select PDF, DOCX, XLSX, or plain text files.",
+            type: 'bot',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        setChatMessages(prev => [...prev, warningMessage]);
+        return;
+    }
+
+    // Pass the filtered file list to the upload handler
+    uploadChatDriveFiles(files);
+}
 const initiateDriveUpload = useCallback((userEmail) => {
 
     // 1. Mandatory Readiness Check: If false, the button SHOULD NOT even be clicked,
@@ -1548,7 +1748,7 @@ const pickerCallback = useCallback((data, userEmail) => {
     const loadingMessageId = `loading-${Date.now()}`;
     const loadingMessage = {
       id: loadingMessageId,
-      text: moduleName === 'PM Template' ? 'Loading PM Template...' : 'Starting project analysis...',
+      text: moduleName === 'PM Template' ? 'Loading ...' : 'Starting project analysis...',
       type: 'bot',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
@@ -2488,7 +2688,7 @@ const pickerCallback = useCallback((data, userEmail) => {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-          <span>Back</span>
+          <span>HOME</span>
         </button>
         <button 
           className="header-logout-btn"
@@ -3276,6 +3476,37 @@ const pickerCallback = useCallback((data, userEmail) => {
                         </svg>
                         <span>Add photos & files</span>
                       </button>
+                      <button
+  className="chat-attach-menu-item"
+  onClick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    //console.log("Chat Google Drive clicked");
+    //setShowAttachMenu(false);
+    setShowAttachMenu(false);
+    // CRITICAL CHANGE: Call the new, dedicated function
+    openChatDrivePicker(e);
+  }}
+>
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+  <span>Add from Google Drive</span>
+</button>
+
+
                     </div>
                   )}
                 </div>

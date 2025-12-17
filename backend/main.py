@@ -15,6 +15,9 @@ from dotenv import load_dotenv
 import requests
 from openpyxl import load_workbook
 from services.indexing import index_file_background
+from pydantic import BaseModel
+from services.docx_extraction_helper import extract_text_with_hyperlinks_from_docx
+from typing import List, Dict, Any, Optional
 
 from models import Base, Feedback, UploadedFile, MandatoryFile, ProjectKnowledgeBaseFile, ChatMessage, Conversation, Project, get_db, engine
 from schemas import (
@@ -2198,6 +2201,117 @@ def _search_across_all_files_and_route(
         "file_scores": file_scores,
         "context_chunks": context_chunks
     }
+# --- Models for Multi-File Ingestion ---
+
+class ChatDriveFile(BaseModel):
+    drive_file_id: str
+    name: str
+    mime_type: str
+
+class ProcessMultiFilesRequest(BaseModel):
+    source: str  # This will be "google_drive"
+    files: List[Dict[str, Any]]
+    user_email: Optional[str] = None
+
+@app.post("/api/process-multi-files")
+async def process_multi_files(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Handles file ingestion for the chat session from Google Drive.
+    Downloads, extracts text, saves to UploadedFile table, and indexes to Pinecone.
+    """
+    try:
+        body = await request.json()
+        source = body.get("source")
+        files_data = body.get("files", [])
+        user_email = body.get("user_email", "anonymous")
+        
+        # Get the token sent from frontend for downloading
+        auth_header = request.headers.get("Authorization")
+        access_token = None
+        if auth_header and auth_header.startswith("Bearer "):
+            access_token = auth_header.split(" ")[1]
+
+        if source != "google_drive" or not access_token:
+            return JSONResponse(status_code=400, content={"success": False, "error": "Invalid source or missing token"})
+
+        uploaded_file_ids = []
+        
+        for file_info in files_data:
+            file_name = file_info.get("name")
+            drive_id = file_info.get("drive_file_id")
+            mime_type = file_info.get("mime_type")
+            
+            print(f"[CHAT-DRIVE] Processing: {file_name}")
+
+            # 1. Download content from Drive
+            download_result = download_drive_file_content(drive_id, file_name, mime_type, access_token)
+            if not download_result["success"]:
+                print(f"[CHAT-DRIVE] Download failed for {file_name}")
+                continue
+                
+            file_content = download_result["content"]
+            file_extension = download_result["file_type"]
+            extracted_text = ""
+
+            # 2. Extract Text (Reusing your local upload logic)
+            try:
+                if file_extension == 'pdf':
+                    res = pdf_service.extract_text_from_pdf(file_content)
+                    if res['success']: extracted_text = res['text']
+                elif file_extension in ['docx', 'doc']:
+                    extracted_text = extract_text_with_hyperlinks_from_docx(file_content)
+                elif file_extension in ['xlsx', 'xls']:
+                    workbook = load_workbook(filename=io.BytesIO(file_content), data_only=True)
+                    lines = []
+                    for sheet in workbook.worksheets:
+                        for row in sheet.iter_rows(values_only=True):
+                            cells = [str(c) for c in row if c is not None]
+                            if cells: lines.append("\t".join(cells))
+                    extracted_text = "\n".join(lines)
+                elif file_extension == 'txt':
+                    extracted_text = file_content.decode('utf-8', errors='ignore')
+            except Exception as e:
+                print(f"[CHAT-DRIVE] Extraction error for {file_name}: {str(e)}")
+
+            # 3. Save to UploadedFile table (This makes it "the same" as local upload)
+            new_file = UploadedFile(
+                file_name=file_name,
+                file_type=file_extension,
+                file_path=f"google_drive://{drive_id}",
+                uploaded_by=user_email,
+                status="Processed",
+                extracted_text=extracted_text,
+                indexing_status="pending_index"
+            )
+            db.add(new_file)
+            db.commit()
+            db.refresh(new_file)
+            uploaded_file_ids.append(new_file.id)
+
+            # 4. Queue for Pinecone Indexing (So chatbot can answer immediately)
+            background_tasks.add_task(
+                index_file_background,
+                file_id=new_file.id,
+                text=extracted_text,
+                source_filename=new_file.file_name,
+                file_type=new_file.file_type,
+                uploaded_by=new_file.uploaded_by,
+                uploaded_at=new_file.upload_time
+            )
+
+        return {
+            "success": True,
+            "uploaded_file_ids": uploaded_file_ids,
+            "message": f"Successfully processed {len(uploaded_file_ids)} files from Drive."
+        }
+
+    except Exception as e:
+        print(f"[PROCESS-MULTI-FILES] Error: {str(e)}")
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
 @app.post("/api/ask-question")
