@@ -2385,12 +2385,16 @@ const pickerCallback = useCallback((data, userEmail) => {
   };
 
   const handleLogout = async () => {
-    // Clear sessionStorage for chatbot
-    sessionStorage.removeItem('hasShownFullscreenChat');
-    sessionStorage.removeItem('lastShownFullscreenChatUserId');
-    await logout();
-    navigate('/');
-    setShowProfilePopup(false);
+  // Clear sessionStorage for chatbot
+  sessionStorage.removeItem('hasShownFullscreenChat');
+  sessionStorage.removeItem('lastShownFullscreenChatUserId');
+
+  await logout();
+
+  // Go to landing page (same as Data Agent style)
+  window.location.href = `${process.env.REACT_APP_BASE_FRONTEND_URL}?action=logout`;
+
+  setShowProfilePopup(false);
   };
 
   const handleAddAccount = async () => {
