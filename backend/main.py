@@ -2131,61 +2131,100 @@ async def process_multi_files(
     Handles file ingestion for the chat session from Google Drive.
     Downloads, extracts text, saves to UploadedFile table, and indexes to Pinecone.
     """
+
+    # ---------- FIX 1: SAFE JSON READ (RENDER SAFE) ----------
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        if not raw_body:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Empty request body"}
+            )
+        body = json.loads(raw_body)
+    except Exception as e:
+        print(f"[PROCESS-MULTI-FILES] JSON error: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "Invalid JSON body"}
+        )
+
+    try:
         source = body.get("source")
         files_data = body.get("files", [])
         user_email = body.get("user_email", "anonymous")
-        
-        # Get the token sent from frontend for downloading
+
+        # ---------- AUTH TOKEN ----------
         auth_header = request.headers.get("Authorization")
         access_token = None
         if auth_header and auth_header.startswith("Bearer "):
             access_token = auth_header.split(" ")[1]
 
         if source != "google_drive" or not access_token:
-            return JSONResponse(status_code=400, content={"success": False, "error": "Invalid source or missing token"})
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Invalid source or missing token"}
+            )
+
+        if not files_data:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "No files received"}
+            )
 
         uploaded_file_ids = []
-        
+
         for file_info in files_data:
             file_name = file_info.get("name")
             drive_id = file_info.get("drive_file_id")
             mime_type = file_info.get("mime_type")
-            
+
+            if not file_name or not drive_id:
+                continue
+
             print(f"[CHAT-DRIVE] Processing: {file_name}")
 
-            # 1. Download content from Drive
-            download_result = download_drive_file_content(drive_id, file_name, mime_type, access_token)
-            if not download_result["success"]:
+            # 1️⃣ Download from Drive
+            download_result = download_drive_file_content(
+                drive_id,
+                file_name,
+                mime_type,
+                access_token
+            )
+
+            if not download_result.get("success"):
                 print(f"[CHAT-DRIVE] Download failed for {file_name}")
                 continue
-                
+
             file_content = download_result["content"]
             file_extension = download_result["file_type"]
             extracted_text = ""
 
-            # 2. Extract Text (Reusing your local upload logic)
+            # 2️⃣ Extract text
             try:
-                if file_extension == 'pdf':
+                if file_extension == "pdf":
                     res = pdf_service.extract_text_from_pdf(file_content)
-                    if res['success']: extracted_text = res['text']
-                elif file_extension in ['docx', 'doc']:
+                    if res.get("success"):
+                        extracted_text = res.get("text", "")
+                elif file_extension in ["docx", "doc"]:
                     extracted_text = extract_text_with_hyperlinks_from_docx(file_content)
-                elif file_extension in ['xlsx', 'xls']:
-                    workbook = load_workbook(filename=io.BytesIO(file_content), data_only=True)
+                elif file_extension in ["xlsx", "xls"]:
+                    workbook = load_workbook(
+                        filename=io.BytesIO(file_content),
+                        data_only=True
+                    )
                     lines = []
                     for sheet in workbook.worksheets:
                         for row in sheet.iter_rows(values_only=True):
                             cells = [str(c) for c in row if c is not None]
-                            if cells: lines.append("\t".join(cells))
+                            if cells:
+                                lines.append("\t".join(cells))
                     extracted_text = "\n".join(lines)
-                elif file_extension == 'txt':
-                    extracted_text = file_content.decode('utf-8', errors='ignore')
+                elif file_extension == "txt":
+                    extracted_text = file_content.decode("utf-8", errors="ignore")
             except Exception as e:
                 print(f"[CHAT-DRIVE] Extraction error for {file_name}: {str(e)}")
 
-            # 3. Save to UploadedFile table (This makes it "the same" as local upload)
+            # 3️⃣ Save to DB
             new_file = UploadedFile(
                 file_name=file_name,
                 file_type=file_extension,
@@ -2195,12 +2234,13 @@ async def process_multi_files(
                 extracted_text=extracted_text,
                 indexing_status="pending_index"
             )
+
             db.add(new_file)
             db.commit()
             db.refresh(new_file)
             uploaded_file_ids.append(new_file.id)
 
-            # 4. Queue for Pinecone Indexing (So chatbot can answer immediately)
+            # 4️⃣ Background indexing
             background_tasks.add_task(
                 index_file_background,
                 file_id=new_file.id,
@@ -2211,15 +2251,22 @@ async def process_multi_files(
                 uploaded_at=new_file.upload_time
             )
 
-        return {
-            "success": True,
-            "uploaded_file_ids": uploaded_file_ids,
-            "message": f"Successfully processed {len(uploaded_file_ids)} files from Drive."
-        }
+        # ---------- FIX 2: ALWAYS RETURN JSON ----------
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "uploaded_file_ids": uploaded_file_ids,
+                "message": f"Successfully processed {len(uploaded_file_ids)} files from Drive."
+            }
+        )
 
     except Exception as e:
         print(f"[PROCESS-MULTI-FILES] Error: {str(e)}")
-        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 
 @app.post("/api/ask-question")
