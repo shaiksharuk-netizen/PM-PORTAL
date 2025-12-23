@@ -649,7 +649,7 @@ const uploadChatDriveFiles = async (files) => {
     try {
       // NOTE: This assumes your backend has the /api/process-multi-files endpoint ready 
       // to handle {source: "google_drive"} and the access token (we will verify this in the backend step).
-      const response = await fetch("/api/process-multi-files", {
+      const response = await fetch("https://pm-portal-2.onrender.com/api/process-multi-files", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
