@@ -70,8 +70,8 @@ class PineconeService:
         # Convert to lowercase
         sanitized = sanitized.lower()
         
-        # Limit length to 40 characters (to leave room for prefix)
-        sanitized = sanitized[:40]
+        # Limit length to 25 characters (to leave room for prefix)
+        sanitized = sanitized[:25]
         
         # Ensure it doesn't start with a number (add prefix if needed)
         if sanitized and sanitized[0].isdigit():
@@ -92,6 +92,9 @@ class PineconeService:
             index_name = 'kb' + index_name
         if index_name.endswith('-'):
             index_name = index_name[:-1]
+
+        # 🔒 HARD LIMIT — Pinecone allows max 45 chars
+        index_name = index_name[:45]
         
         return index_name
     
