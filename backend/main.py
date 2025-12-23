@@ -1681,193 +1681,183 @@ async def upload_from_drive(
 ):
     """
     Downloads files from Google Drive using the provided token, then processes them 
-    using the core file saving and indexing logic (Duplicated from process_single_file).
+    using the core file saving and indexing logic.
     """
-    
-    # We rely on all file processing libraries (uuid, Path, Document, etc.) being imported globally at the top of main.py
-    # and the DriveUploadRequest/download_drive_file_content being imported from drive_service.py.
-
-    files_to_process = request_data.files
-    access_token = request_data.access_token
-    uploaded_by = request_data.user_email
-    
-    if not files_to_process or not access_token:
-        return {
-            "success": False,
-            "error": "Missing file list or access token.",
-            "total_files": 0
-        }
+    # 1. Global Try-Except to catch critical server failures (imports, DB issues, etc.)
+    try:
+        files_to_process = request_data.files
+        access_token = request_data.access_token
+        uploaded_by = request_data.user_email
         
-    results = []
-    successful_files = []
-    failed_files = []
-    
-    print(f"[DRIVE-UPLOAD] Processing {len(files_to_process)} Google Drive file(s)...")
-
-    for idx, file_info in enumerate(files_to_process, 1):
-        file_id = file_info.get('id')
-        file_name = file_info.get('name')
-        mime_type = file_info.get('mimeType')
-        file_path = None
-        
-        print(f"[DRIVE-UPLOAD] Processing file {idx}/{len(files_to_process)}: {file_name} (ID: {file_id})")
-        
-        # Step 1: Download file content from Google Drive (using the external service)
-        download_result = download_drive_file_content(file_id, file_name, mime_type, access_token)
-        
-        if not download_result["success"]:
-            failed_files.append({
-                "success": False, 
-                "error": download_result["error"], 
-                "file_name": file_name
-            })
-            continue
-            
-        # Extract necessary info from download result
-        file_content_bytes = download_result["content"]
-        final_file_name = download_result["final_file_name"]
-        file_extension = download_result["file_type"]
-        
-        # --- START Duplicated File Processing Logic (from process_single_file) ---
-        
-        try:
-            # Validate file extension
-            if file_extension not in ['pdf', 'docx', 'txt', 'doc', 'xlsx', 'pptx', 'ppt', 'png', 'xls']:
-                failed_files.append({
+        # Validate Input
+        if not files_to_process or not access_token:
+            return JSONResponse(
+                status_code=400,
+                content={
                     "success": False,
-                    "error": f"Invalid file type after conversion. Got: {file_extension}",
+                    "error": "Missing file list or access token.",
+                    "total_files": 0
+                }
+            )
+            
+        results = []
+        successful_files = []
+        failed_files = []
+        
+        print(f"[DRIVE-UPLOAD] Processing {len(files_to_process)} Google Drive file(s)...")
+
+        for idx, file_info in enumerate(files_to_process, 1):
+            file_id = file_info.get('id')
+            file_name = file_info.get('name')
+            mime_type = file_info.get('mimeType')
+            file_path = None
+            
+            print(f"[DRIVE-UPLOAD] Processing file {idx}/{len(files_to_process)}: {file_name} (ID: {file_id})")
+            
+            # Step 1: Download file content from Google Drive
+            try:
+                download_result = download_drive_file_content(file_id, file_name, mime_type, access_token)
+            except Exception as e:
+                print(f"[DRIVE-UPLOAD] Download service crash for {file_name}: {str(e)}")
+                failed_files.append({"success": False, "error": "Download service failure", "file_name": file_name})
+                continue
+
+            if not download_result or not download_result.get("success"):
+                failed_files.append({
+                    "success": False, 
+                    "error": download_result.get("error", "Unknown download error"), 
                     "file_name": file_name
                 })
                 continue
-
-            # Create uploads directory if it doesn't exist
-            upload_dir = Path("uploads")
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Generate unique filename
-            unique_filename = f"{uuid.uuid4()}_{final_file_name}"
-            file_path = upload_dir / unique_filename
-            
-            # Save file to disk
-            with open(file_path, "wb") as f:
-                f.write(file_content_bytes)
-            
-            # Extract text based on file type (using in-memory bytes)
-            extracted_text = ""
-            
-            # Assuming these services/libraries are accessible via their module paths
-            from services.pdf_service import pdf_service
-            from services.docx_extraction_helper import extract_text_with_hyperlinks_from_docx
-            
-            if file_extension == 'pdf':
-                result = pdf_service.extract_text_from_pdf(file_content_bytes)
-                if result['success']: extracted_text = result['text']
-                else: extracted_text = f"PDF extraction failed: {result.get('error')}"
                 
-            elif file_extension in ['docx', 'doc']:
-                try:
-                    extracted_text = extract_text_with_hyperlinks_from_docx(file_content_bytes)
-                except:
-                    # Fallback extraction using docx library (which should be globally imported)
-                    doc = Document(io.BytesIO(file_content_bytes))
-                    extracted_text = "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+            file_content_bytes = download_result["content"]
+            final_file_name = download_result["final_file_name"]
+            file_extension = download_result["file_type"]
+            
+            # Step 2: Local Processing and DB Storage
+            try:
+                # Validate file extension
+                allowed_extensions = ['pdf', 'docx', 'txt', 'doc', 'xlsx', 'pptx', 'ppt', 'png', 'xls']
+                if file_extension not in allowed_extensions:
+                    failed_files.append({
+                        "success": False,
+                        "error": f"Unsupported file type: {file_extension}",
+                        "file_name": file_name
+                    })
+                    continue
+
+                # Ensure upload directory exists
+                upload_dir = Path("uploads")
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                
+                unique_filename = f"{uuid.uuid4()}_{final_file_name}"
+                file_path = upload_dir / unique_filename
+                
+                # Write to disk
+                with open(file_path, "wb") as f:
+                    f.write(file_content_bytes)
+                
+                # Text Extraction
+                extracted_text = ""
+                from services.pdf_service import pdf_service
+                from services.docx_extraction_helper import extract_text_with_hyperlinks_from_docx
+                
+                if file_extension == 'pdf':
+                    result = pdf_service.extract_text_from_pdf(file_content_bytes)
+                    extracted_text = result['text'] if result['success'] else f"PDF extraction failed: {result.get('error')}"
                     
-            elif file_extension == 'txt':
-                extracted_text = file_content_bytes.decode('utf-8', errors='ignore')
-                
-            elif file_extension in ['xlsx', 'xls']:
-                # Spreadsheet extraction using openpyxl (which should be globally imported)
-                workbook = load_workbook(filename=io.BytesIO(file_content_bytes), data_only=True)
-                lines = []
-                for sheet in workbook.worksheets:
-                    lines.append(f"Sheet: {sheet.title}")
-                    for row in sheet.iter_rows(values_only=True):
-                        cells = [str(cell) for cell in row if cell is not None]
-                        if cells: lines.append("\t".join(cells))
-                extracted_text = "\n".join(lines) if lines else f"[XLSX file: {file_name}] - No extractable text."
-                
-            elif file_extension in ['pptx', 'ppt', 'png']:
-                extracted_text = f"[{file_extension.upper()} file from Drive: {file_name}] - Text extraction skipped for binary format."
-            
-            # Save to database (MandatoryFile model)
-            mandatory_file = MandatoryFile(
-                file_name=final_file_name,
-                file_type=file_extension,
-                file_path=None,  # optional: set None if storing content in DB only
-                file_content=file_content_bytes,  # store the actual file bytes
-                file_size=len(file_content_bytes),
-                uploaded_by=uploaded_by or "anonymous",
-                description=None,  # optionally add description from request if you have
-                is_active=True,
-                extracted_text=extracted_text  # store extracted text
+                elif file_extension in ['docx', 'doc']:
+                    try:
+                        extracted_text = extract_text_with_hyperlinks_from_docx(file_content_bytes)
+                    except:
+                        from docx import Document
+                        doc = Document(io.BytesIO(file_content_bytes))
+                        extracted_text = "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+                        
+                elif file_extension == 'txt':
+                    extracted_text = file_content_bytes.decode('utf-8', errors='ignore')
+                    
+                elif file_extension in ['xlsx', 'xls']:
+                    workbook = load_workbook(filename=io.BytesIO(file_content_bytes), data_only=True)
+                    lines = []
+                    for sheet in workbook.worksheets:
+                        lines.append(f"Sheet: {sheet.title}")
+                        for row in sheet.iter_rows(values_only=True):
+                            cells = [str(cell) for cell in row if cell is not None]
+                            if cells: lines.append("\t".join(cells))
+                    extracted_text = "\n".join(lines) if lines else "No text found in XLSX."
+                    
+                elif file_extension in ['pptx', 'ppt', 'png']:
+                    extracted_text = f"[{file_extension.upper()} file: {file_name}] - Extraction skipped."
+
+                # DB Commit
+                mandatory_file = MandatoryFile(
+                    file_name=final_file_name,
+                    file_type=file_extension,
+                    file_path=str(file_path),
+                    file_content=file_content_bytes,
+                    file_size=len(file_content_bytes),
+                    uploaded_by=uploaded_by or "anonymous",
+                    is_active=True,
+                    extracted_text=extracted_text
                 )
-            
-            db.add(mandatory_file)
-            db.commit()
-            db.refresh(mandatory_file)
-            
-            # Schedule indexing in Pinecone (always background)
-            background_tasks.add_task(
-                index_file_background,
-                file_id=mandatory_file.id,
-                text=extracted_text,
-                source_filename=mandatory_file.file_name,
-                file_type=mandatory_file.file_type,
-                uploaded_by=mandatory_file.uploaded_by,
-                uploaded_at=mandatory_file.uploaded_at
-            )
-            print(f"[DRIVE-UPLOAD] File {mandatory_file.id} ({mandatory_file.file_name}) saved to MandatoryFile and queued for indexing")
+                
+                db.add(mandatory_file)
+                db.commit()
+                db.refresh(mandatory_file)
+                
+                # Background Indexing
+                if background_tasks:
+                    background_tasks.add_task(
+                        index_file_background,
+                        file_id=mandatory_file.id,
+                        text=extracted_text,
+                        source_filename=mandatory_file.file_name,
+                        file_type=mandatory_file.file_type,
+                        uploaded_by=mandatory_file.uploaded_by,
+                        uploaded_at=mandatory_file.uploaded_at
+                    )
 
-            successful_files.append({
-                "success": True,
-                "file_id": mandatory_file.id,
-                "file_name": mandatory_file.file_name,
-                "file_type": mandatory_file.file_type,
-               "extracted_length": len(extracted_text),
-                "message": f"File downloaded from Drive and saved as mandatory file."
-            })
+                successful_files.append({
+                    "success": True,
+                    "file_id": mandatory_file.id,
+                    "file_name": mandatory_file.file_name,
+                    "message": "File processed and saved successfully."
+                })
 
-        except Exception as e:
-            db.rollback()
-            import traceback
-            error_trace = traceback.format_exc()
-            print(f"[DRIVE-UPLOAD] Error processing file {file_name}: {str(e)}\n{error_trace}")
-            
-            # Clean up local file if it was saved
-            if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-            
-            failed_files.append({
-                "success": False,
-                "error": f"Error processing file on server: {str(e)}",
-                "file_name": file_name
-            })
-            
-        # --- END Duplicated File Processing Logic ---
-            
-    # Prepare final response
-    total_files = len(files_to_process)
-    success_count = len(successful_files)
-    failed_count = len(failed_files)
-    
-    results.extend(successful_files)
-    results.extend(failed_files)
-    
-    response = {
-        "success": success_count > 0,
-        "total_files": total_files,
-        "successful_uploads": success_count,
-        "failed_uploads": failed_count,
-        "files": results,
-        "message": f"Processed {total_files} file(s): {success_count} successful, {failed_count} failed"
-    }
-    
-    if failed_count > 0 and success_count > 0:
-        response["warning"] = f"{failed_count} file(s) failed to upload. Check individual file results for details."
+            except Exception as e:
+                db.rollback()
+                print(f"[DRIVE-UPLOAD] File processing error: {str(e)}")
+                if file_path and file_path.exists():
+                    file_path.unlink() # Cleanup file on failure
+                failed_files.append({"success": False, "error": str(e), "file_name": file_name})
+
+        # Final Response Construction
+        results.extend(successful_files)
+        results.extend(failed_files)
         
-    print(f"[DRIVE-UPLOAD] Batch upload complete: {success_count}/{total_files} successful")
-    return response
+        return {
+            "success": len(successful_files) > 0,
+            "total_files": len(files_to_process),
+            "successful_uploads": len(successful_files),
+            "failed_uploads": len(failed_files),
+            "files": results,
+            "message": f"Processed {len(files_to_process)} file(s)."
+        }
 
+    except Exception as e:
+        import traceback
+        print(f"[CRITICAL-DRIVE-UPLOAD-ERROR] {str(e)}")
+        print(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Critical server error: {str(e)}",
+                "total_files": 0
+            }
+        )
+            
 # --- END NEW: Google Drive Upload Endpoint ---
 
 def _router_answerer_system_prompt() -> str:
