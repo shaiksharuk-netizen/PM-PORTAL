@@ -1,4 +1,3 @@
-main.py:
 from fastapi import FastAPI, Depends, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi import Request as FastAPIRequest
