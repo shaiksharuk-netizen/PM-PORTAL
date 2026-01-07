@@ -5720,14 +5720,34 @@ body, html {
   align-items: center;
   gap: 12px;
   padding: 28px 40px;
-  background: #f5f7fa;
-  border: 2px solid transparent;
+  background: #ffffff !important;
+  border: 2px solid #3b82f6 !important;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
   min-width: 160px;
+  opacity: 1 !important;
+  box-shadow: 0 0 0 1px #3b82f6, 0 2px 8px rgba(59, 130, 246, 0.2) !important;
 }
 
+/* Optional: Make the icon circle look cleaner */
+.file-source-icon {
+  background: #eff6ff !important; /* Light blue tint behind icon */
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Hover effect so it feels interactive */
+.file-source-option:hover {
+  background: #f8fafc !important;
+  border-color: #2563eb !important;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 15px rgba(59, 130, 246, 0.15);
+}
 .file-source-option:hover {
   background: #ffffff;
   border-color: #c5d5e8;
