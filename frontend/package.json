@@ -21,6 +21,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "postinstall": "npx update-browserslist-db@latest",
     "build": "node build-clean.js",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
