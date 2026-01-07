@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, JSON, F
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
 import os
 import uuid
 from dotenv import load_dotenv
@@ -109,9 +108,6 @@ class UploadedFile(Base):
     status = Column(String, default="Uploaded")  # Uploaded, Processing, Processed, Error
     extracted_text = Column(Text)  # Extracted text content from the file
     indexing_status = Column(String, default="pending_index")  # pending_index, indexed, error
-    file_hash = Column(String, index=True, nullable=True) 
-    expires_at = Column(DateTime(timezone=True), nullable=True)
-    
 
 class MandatoryFile(Base):
     __tablename__ = "mandatory_files"
@@ -174,24 +170,3 @@ class Project(Base):
     user_email = Column(String, index=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-class UserUploadedFile(Base):
-    __tablename__ = "user_uploaded_files"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    user_email = Column(String, index=True, nullable=False)
-
-    # Either uploaded_files.id OR mandatory_files.id
-    file_id = Column(Integer, nullable=False)
-
-    file_source = Column(String, nullable=False)
-    # values:
-    # 'chat_upload'  -> uploaded_files
-    # 'gdrive_upload' -> mandatory_files
-
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-
-    is_active = Column(Boolean, default=True)
-
