@@ -1,4 +1,3 @@
-//const response = await fetch("https://pm-portal-2.onrender.com/api/process-multi-files", {
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,11 +14,10 @@ const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
 const DEVELOPER_API_KEY = process.env.REACT_APP_GOOGLE_DEVELOPER_API_KEY; 
 const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly'; 
 const FASTAPI_DRIVE_UPLOAD_URL = process.env.REACT_APP_API_URL + '/api/upload-from-drive'; 
-
-//let accessToken = ''; // Global variable to h
+let accessToken = ''; // Global variable to h
 // old the OAuth token
 let pickerApiLoaded = false;
-//let chatDriveAccessToken = ''; // <--- NEW: Dedicated token for Chat Drive Picker
+let chatDriveAccessToken = ''; // <--- NEW: Dedicated token for Chat Drive Picker
 // ... (rest of the global functions are fine)
 
 // 1. Initialization and Loading Check
@@ -42,7 +40,39 @@ let pickerApiLoaded = false;
 // }
 
 
+// Placeholder function for scope visibility
+function createPicker(userEmail) {
+    if (!accessToken) return;
 
+    if (!window.google || !window.google.picker) {
+        console.error("Google Picker API object not found.");
+        alert("Google services are still loading. Please try again.");
+        return;
+    }
+
+    const view = new window.google.picker.View(window.google.picker.ViewId.DOCS);
+view.setMimeTypes(
+  'application/pdf,' +
+  'application/vnd.google-apps.document,' +
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
+  'application/vnd.google-apps.spreadsheet,' +
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+);
+
+const picker = new window.google.picker.PickerBuilder()
+  .setAppId("385613091121") // ✅ Your Google Cloud Project Number
+  .setOAuthToken(accessToken)
+  .setDeveloperKey(DEVELOPER_API_KEY)
+  .addView(view)
+  .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+  .setCallback((data) => window.pickerCallback(data, userEmail))
+  .build();
+
+picker.setVisible(true); // ✅ This launches the Drive Picker UI
+
+//picker.setModal(true);
+}
+// --- END NEW GLOBAL CODE ---
 
 const HomePage = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
@@ -52,47 +82,6 @@ const HomePage = () => {
   const [isPickerReady, setIsPickerReady] = useState(false); // New
   const [toastMessage, setToastMessage] = useState('');
   const isChatFullscreen = true;
-  const [accessToken, setAccessToken] = useState('');
-  const [chatDriveAccessToken, setChatDriveAccessToken] = useState('');
-  const chatTokenRef = useRef('');
-
-
-  // Placeholder function for scope visibility
-const createPicker = useCallback((userEmail) => {
-    if (!accessToken) {
-        console.warn("No access token found for picker.");
-        return;
-    }
-
-    if (!window.google || !window.google.picker) {
-        console.error("Google Picker API object not found.");
-        alert("Google services are still loading. Please try again.");
-        return;
-    }
-
-    const view = new window.google.picker.View(window.google.picker.ViewId.DOCS);
-    view.setMimeTypes(
-        'application/pdf,' +
-        'application/vnd.google-apps.document,' +
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
-        'application/vnd.google-apps.spreadsheet,' +
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-
-    const picker = new window.google.picker.PickerBuilder()
-        .setAppId("385613091121") 
-        .setOAuthToken(accessToken) // This now points to the correct state
-        .setDeveloperKey(DEVELOPER_API_KEY)
-        .addView(view)
-        .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
-        .setCallback((data) => window.pickerCallback(data, userEmail))
-        .build();
-
-    picker.setVisible(true);
-}, [accessToken]); // <--- This ensures the function updates when the user logs in
-
-
-
   // Chat drag/position state
   const [isDraggingChat, setIsDraggingChat] = useState(false);
   const [chatUseCustomPosition, setChatUseCustomPosition] = useState(false);
@@ -572,7 +561,7 @@ const openChatDrivePicker = useCallback((e) => {
     // --- SCENARIO A: Token is already in memory ---
     if (chatDriveAccessToken) {
         console.log("Chat Token available. Launching Picker.");
-        createChatDrivePicker(user.email, chatDriveAccessToken);
+        createChatDrivePicker(user.email);
         return;
     }
     
@@ -584,10 +573,9 @@ const openChatDrivePicker = useCallback((e) => {
         scope: DRIVE_SCOPES,
         callback: (tokenResponse) => {
             if (tokenResponse && tokenResponse.access_token) {
-                chatTokenRef.current = tokenResponse.access_token; // <--- ADD THIS
-                setChatDriveAccessToken(tokenResponse.access_token);
+                chatDriveAccessToken = tokenResponse.access_token;
                 console.log("✅ Token received. Launching Picker.");
-                createChatDrivePicker(user.email, tokenResponse.access_token);
+                createChatDrivePicker(user.email); 
             } else if (tokenResponse.error) {
                 console.error("Token error:", tokenResponse.error);
             }
@@ -606,8 +594,8 @@ const openChatDrivePicker = useCallback((e) => {
  *******************************************************/
 
 // 1. Function to create the Google Picker for Chat
-function createChatDrivePicker(userEmail, passedToken)  {
-  if (!window.google || !window.google.picker || !passedToken) {
+function createChatDrivePicker(userEmail) {
+  if (!window.google || !window.google.picker || !chatDriveAccessToken) {
     console.error("Chat Picker not fully ready or token missing.");
     return;
   }
@@ -632,8 +620,7 @@ function createChatDrivePicker(userEmail, passedToken)  {
 
   const picker = new window.google.picker.PickerBuilder()
     .setAppId(window.google.picker.PickerBuilder.GOOGLE_DOCS_APP_ID)
-    .setOAuthToken(passedToken)
-    .setAuthUser(userEmail) // <--- Add this line
+    .setOAuthToken(chatDriveAccessToken)
     .setDeveloperKey(DEVELOPER_API_KEY)
     .addView(view)
     .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED) // Enable multiple file selection
@@ -645,7 +632,7 @@ function createChatDrivePicker(userEmail, passedToken)  {
 
 
 // 2. Callback function triggered once files are selected (Sends to /api/process-multi-files)
-const uploadChatDriveFiles = async (files, passedToken) => {
+const uploadChatDriveFiles = async (files) => {
     if (!files.length) return;
 
     // Display file names in chat immediately for better UX
@@ -667,7 +654,7 @@ const uploadChatDriveFiles = async (files, passedToken) => {
         headers: {
           "Content-Type": "application/json",
           // Pass the token to the backend for file download
-          Authorization: `Bearer ${passedToken}` 
+          Authorization: `Bearer ${chatDriveAccessToken}` 
         },
         body: JSON.stringify({
           source: "google_drive", // CRITICAL: Identify source for backend
@@ -687,27 +674,18 @@ const uploadChatDriveFiles = async (files, passedToken) => {
       }
 
       // Display success/failure messages in the chat
-      if (result.success && result.uploadedFileIds) {
+      if (result.success && result.uploaded_file_ids) {
         // Update state to track these files (they will override playbook for subsequent questions)
         setUploadedFileIds(prev => [
           ...prev,
-          ...result.uploadedFileIds
+          ...result.uploaded_file_ids
         ]);
-        setUploadedFileId(result.uploadedFileIds[result.uploadedFileIds.length - 1] || null);
+        setUploadedFileId(result.uploaded_file_ids[result.uploaded_file_ids.length - 1] || null);
         
-        const successCount = result.uploadedFileIds.length;
-        let summaryText = ""; 
-        if (result.status === "reused") { 
-            summaryText = "✅ File already exists. You can now ask questions directly.";
-         } 
-         else if (result.status === "mixed") { 
-          summaryText = "✅ Some files already existed. You can now ask questions directly."; 
-        } else { 
-          summaryText = `✅ ${successCount}/${files.length} file(s) from Drive processed successfully! You can now ask questions about these documents.`; 
-        }
+        const successCount = result.uploaded_file_ids.length;
         
         const summaryMessage = {
-            text: summaryText,
+            text: `✅ ${successCount}/${files.length} file(s) from Drive processed successfully! You can now ask questions about these documents.`,
             type: 'bot',
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
@@ -758,7 +736,7 @@ function chatDrivePickerCallback(data) {
     }
 
     // Pass the filtered file list to the upload handler
-    uploadChatDriveFiles(files, chatTokenRef.current);
+    uploadChatDriveFiles(files);
 }
 const initiateDriveUpload = useCallback((userEmail) => {
 
@@ -790,7 +768,7 @@ const initiateDriveUpload = useCallback((userEmail) => {
     const handleTokenResponse = (tokenResponse) => {
         if (tokenResponse && tokenResponse.access_token) {
             // SUCCESS: Token retrieved/refreshed.
-            setAccessToken(tokenResponse.access_token);
+            accessToken = tokenResponse.access_token;
             console.log("Token retrieved successfully. Launching Picker.");
 
             // CRITICAL: Ensure modal is closed before launching the external Picker UI.
@@ -1693,26 +1671,17 @@ const pickerCallback = useCallback((data, userEmail) => {
       if (data.success && data.files) {
         // Process each file result
         data.files.forEach((fileResult, index) => {
-          const fileName =
-            fileResult.file_name || selectedFiles[index]?.name || 'Unknown file';
           if (fileResult.success) {
             uploadedIds.push(fileResult.file_id);
-            let messageText;
-
-            if (fileResult.status === "reused") {
-                messageText = `ℹ️ File "${fileName}" already exists. You can directly ask questions about it.`;
-          } else {
-                messageText = `✅ File "${fileName}" uploaded successfully!`;
-          }
-            //const fileName = fileResult.file_name || selectedFiles[index]?.name || 'Unknown file';
+            const fileName = fileResult.file_name || selectedFiles[index]?.name || 'Unknown file';
             const botResponse = {
-              text: messageText,
+              text: `✅ File "${fileName}" uploaded successfully!`,
               type: 'bot',
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
             setChatMessages(prev => [...prev, botResponse]);
           } else {
-            //const fileName = fileResult.file_name || selectedFiles[index]?.name || 'Unknown file';
+            const fileName = fileResult.file_name || selectedFiles[index]?.name || 'Unknown file';
             failedFiles.push(fileName);
             const botResponse = {
               text: `❌ Failed to upload "${fileName}": ${fileResult.error || 'Unknown error'}`,
