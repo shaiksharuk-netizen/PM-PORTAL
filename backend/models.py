@@ -12,7 +12,11 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://username:password@localhost:5432/sprint_demo")
 
 # Create SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,  # Checks connection health before every request
+    pool_recycle=300     # Refreshes connections every 5 minutes
+)
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
