@@ -35,17 +35,11 @@ from services.pdf_service import pdf_service
 load_dotenv()
 
 # Run automatic migrations first (may drop/recreate tables)
-try:
-    from db_migrations import run_migrations
-    run_migrations()
-    print("[OK] Database migrations completed")
-except Exception as e:
-    print(f"[WARNING] Database migrations failed: {str(e)}")
-    print("[INFO] Continuing startup - some features may not work correctly")
+
 
 # Create database tables (creates new tables if they don't exist)
 # This runs after migrations to recreate any dropped tables
-Base.metadata.create_all(bind=engine)
+#Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="PM Portal Bot API",
@@ -3361,10 +3355,6 @@ async def get_default_workspace(db: Session = Depends(get_db)):
         return {"success": False, "message": str(e)}
 
 
-if __name__ == "__main__":
-    import uvicorn
-    # Use 0.0.0.0 to allow external connections on the same network
-    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 async def generate_risk_assessment_pdf(risk_assessment_content: str, assessment_name: str):
     """Generate PDF from risk assessment content using ReportLab"""
@@ -4027,12 +4017,9 @@ async def get_default_workspace(db: Session = Depends(get_db)):
     """Get the default EJM workspace"""
     try:
         from models import Workspace
-        
-        # Check if EJM workspace exists
         workspace = db.query(Workspace).filter(Workspace.name == "EJM").first()
         
         if not workspace:
-            # Create EJM workspace if it doesn't exist
             workspace = Workspace(
                 name="EJM",
                 description="Default EJM workspace",
@@ -4043,7 +4030,7 @@ async def get_default_workspace(db: Session = Depends(get_db)):
             db.refresh(workspace)
         
         return {
-            "success": True,
+            "success": True, 
             "workspace": {
                 "id": workspace.id,
                 "name": workspace.name,
@@ -4054,8 +4041,39 @@ async def get_default_workspace(db: Session = Depends(get_db)):
     except Exception as e:
         return {"success": False, "message": str(e)}
 
+# --- DATABASE STARTUP WITH RETRIES ---
+from sqlalchemy.exc import OperationalError
+import time
+
+@app.on_event("startup")
+def startup_event():
+    retries = 5
+    for attempt in range(retries):
+        try:
+            print(f"[STARTUP] DB init attempt {attempt + 1}")
+            
+            # Run migrations if the file exists
+            try:
+                from db_migrations import run_migrations
+                run_migrations()
+                print("[STARTUP] Migrations completed")
+            except ImportError:
+                print("[STARTUP] No migrations file found, skipping...")
+            
+            # Create tables
+            Base.metadata.create_all(bind=engine)
+            
+            print("[STARTUP] DB connected and tables verified successfully")
+            return
+        except OperationalError as e:
+            print(f"[STARTUP] DB not ready (Attempt {attempt+1}), retrying in 3s... Error: {e}")
+            time.sleep(3)
+
+    print("[STARTUP] DB unavailable after retries, app will still run but DB features may fail")
 
 if __name__ == "__main__":
     import uvicorn
-    # Use 0.0.0.0 to allow external connections on the same network
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Render uses the $PORT environment variable, uvicorn picks this up automatically 
+    # when run via command line, but for local testing:
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
