@@ -39,7 +39,7 @@ load_dotenv()
 
 # Create database tables (creates new tables if they don't exist)
 # This runs after migrations to recreate any dropped tables
-Base.metadata.create_all(bind=engine)
+#Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="PM Portal Bot API",
