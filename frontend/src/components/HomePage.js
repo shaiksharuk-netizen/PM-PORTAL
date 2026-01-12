@@ -3489,7 +3489,7 @@ const pickerCallback = useCallback((data, userEmail) => {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    window.open('http://localhost:5173/', '_blank', 'noopener,noreferrer');
+                    window.open('https://weekly-tracker-backend.onrender.com', '_blank', 'noopener,noreferrer');
                     
                   }}
 
