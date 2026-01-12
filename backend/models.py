@@ -36,6 +36,44 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+import os
+import uuid
+from dotenv import load_dotenv
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Text,
+    Boolean,
+    JSON,
+    ForeignKey,
+    UniqueConstraint,
+    LargeBinary,
+    create_engine,
+)
+from sqlalchemy.sql import func
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set")
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"connect_timeout": 10}
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
 def get_db():
     """Dependency to get database session"""
     db = SessionLocal()
