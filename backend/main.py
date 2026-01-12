@@ -7,11 +7,15 @@ from sqlalchemy import text, func, or_
 from typing import List, Dict, Any
 from drive_service import DriveUploadRequest, download_drive_file_content 
 import os
+from pptx import Presentation
 import io
+from services.indexing import index_file_background
+
 from pathlib import Path
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from services.pinecone_service import pinecone_service
 import requests
 from openpyxl import load_workbook
 from services.indexing import index_file_background
@@ -19,6 +23,14 @@ from pydantic import BaseModel
 from services.docx_extraction_helper import extract_text_with_hyperlinks_from_docx
 from typing import List, Dict, Any, Optional
 import json
+from fastapi.responses import JSONResponse
+import hashlib
+import asyncio
+from models import SessionLocal
+from services.pinecone_service import PineconeService
+
+
+
 from models import Base, Feedback, UploadedFile, MandatoryFile, ProjectKnowledgeBaseFile, ChatMessage, Conversation, Project, get_db, engine
 from schemas import (
     LoginRequest, LoginResponse, 
@@ -35,17 +47,86 @@ from services.pdf_service import pdf_service
 load_dotenv()
 
 # Run automatic migrations first (may drop/recreate tables)
-
+try:
+    from db_migrations import run_migrations
+    run_migrations()
+    print("[OK] Database migrations completed")
+except Exception as e:
+    print(f"[WARNING] Database migrations failed: {str(e)}")
+    print("[INFO] Continuing startup - some features may not work correctly")
 
 # Create database tables (creates new tables if they don't exist)
 # This runs after migrations to recreate any dropped tables
-#Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="PM Portal Bot API",
     description="A chatbot API with LLM integration for project management",
     version="1.0.0"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    # 1. Initialize Pinecone Shared Index
+    try:
+        print("[STARTUP] Initializing Pinecone...")
+        pinecone_service.ensure_shared_index()
+        print("[OK] Pinecone index ready.")
+    except Exception as e:
+        print(f"[ALERT] Pinecone initialization failed: {e}")
+
+    # 2. Start the Background Janitor (Cleanup)
+    print("[STARTUP] Starting background cleanup task...")
+    asyncio.create_task(run_cleanup_loop())
+    print("[OK] Cleanup task is running in the background.")
+
+
+def calculate_file_hash(file_content: bytes) -> str:
+    """
+    Creates a unique fingerprint for the file content.
+    If the content is the same, the hash will be the same.
+    """
+    return hashlib.sha256(file_content).hexdigest()
+
+
+
+def cleanup_expired_files(db: Session):
+    """
+     Finds files where expires_at has passed, deletes them from disk,
+    Pinecone, and the database.
+    """
+    now = datetime.utcnow()
+    expired_files = db.query(UploadedFile).filter(UploadedFile.expires_at < now).all()
+    
+    if not expired_files:
+        print(f"[JANITOR] {now}: No expired files found.")
+        return
+
+    print(f"[JANITOR] {now}: Found {len(expired_files)} expired files to clean up.")
+
+    for file in expired_files:
+        try:
+            # 1. Delete from Disk (local uploads only)
+            if file.file_path and not file.file_path.startswith("google_drive://"):
+                path = Path(file.file_path)
+                if path.exists():
+                    os.remove(path)
+                    print(f"[JANITOR] Deleted disk file: {file.file_path}")
+
+            # 2. Delete from Pinecone
+            index_name = pinecone_service.get_index_name_for_file(file.id, file.file_name)
+            pinecone_service.delete_index(file_id=file.id, file_name=file.file_name)
+            print(f"[JANITOR] Deleted Pinecone index: {index_name}")
+
+            # 3. Delete DB record
+            db.delete(file)
+
+        except Exception as e:
+            print(f"[JANITOR] Error cleaning up file {file.id}: {str(e)}")
+
+    db.commit()
+    print("[JANITOR] Cleanup cycle complete.")
+
 
 def _get_structured_html_system_prompt() -> str:
     """System prompt that enforces structured HTML responses for the chatbot."""
@@ -1247,140 +1328,6 @@ async def gemini_chat(request: dict):
 
     return gemini_service.chat(messages, request.get("max_tokens", 3000))
 
-# Background task for indexing files in Pinecone
-def index_file_background(file_id: int, text: str, source_filename: str, file_type: str, uploaded_by: str, uploaded_at):
-    """
-    Background task to index a file in Pinecone.
-    This runs asynchronously and doesn't block the upload response.
-    """
-    try:
-        from services.pinecone_service import pinecone_service
-        from services.chunking_service import chunking_service
-        from services.embedding_service import embedding_service
-        from models import SessionLocal
-        from datetime import datetime
-        import traceback
-        
-        # Create a new database session for the background task
-        db = SessionLocal()
-        try:
-            # Get the uploaded file record
-            from models import UploadedFile
-            uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
-            
-            if not uploaded_file:
-                print(f"[BACKGROUND INDEX] File {file_id} not found in database")
-                return
-            
-            # Use extracted_text from database if passed text is empty or None
-            text_to_index = text
-            if not text_to_index or not text_to_index.strip():
-                text_to_index = uploaded_file.extracted_text or ""
-                print(f"[BACKGROUND INDEX] File {file_id}: Using extracted_text from database (length: {len(text_to_index) if text_to_index else 0})")
-            
-            # Check if we have text to index
-            if not text_to_index or not text_to_index.strip():
-                print(f"[BACKGROUND INDEX] File {file_id}: No text content to index (empty extracted_text)")
-                uploaded_file.indexing_status = "error"
-                db.commit()
-                return
-            
-            # Handle datetime conversion if needed
-            upload_datetime = uploaded_at
-            if isinstance(upload_datetime, str):
-                try:
-                    # Try parsing ISO format datetime string
-                    upload_datetime = datetime.fromisoformat(upload_datetime.replace('Z', '+00:00'))
-                except:
-                    upload_datetime = uploaded_file.upload_time or datetime.utcnow()
-            elif upload_datetime is None:
-                upload_datetime = uploaded_file.upload_time or datetime.utcnow()
-            
-            # Use values from database if not provided
-            source_filename = source_filename or uploaded_file.file_name or "unknown"
-            file_type = file_type or uploaded_file.file_type or "unknown"
-            uploaded_by = uploaded_by or uploaded_file.uploaded_by or "anonymous"
-            
-            print(f"[BACKGROUND INDEX] Starting indexing for file {file_id} ({source_filename}), text length: {len(text_to_index)}")
-            
-            # Create Pinecone index for this file
-            pinecone_index_result = pinecone_service.create_index_for_file(
-                file_id=file_id,
-                file_name=source_filename
-            )
-            
-            if not pinecone_index_result.get("success"):
-                error_msg = pinecone_index_result.get("error", "Unknown error creating Pinecone index")
-                uploaded_file.indexing_status = "error"
-                db.commit()
-                print(f"[BACKGROUND INDEX] File {file_id} indexing failed: {error_msg}")
-                return
-            
-            # Chunk text for Pinecone (400 chars, 100 overlap)
-            chunks = chunking_service.chunk_text_by_characters(
-                text=text_to_index,
-                chunk_size=400,
-                chunk_overlap=100,
-                metadata={
-                    "file_id": file_id,
-                    "file_name": source_filename,
-                    "file_type": file_type,
-                    "uploaded_by": uploaded_by,
-                    "uploaded_at": upload_datetime.isoformat() if upload_datetime else None
-                }
-            )
-            
-            if not chunks:
-                uploaded_file.indexing_status = "error"
-                db.commit()
-                print(f"[BACKGROUND INDEX] File {file_id}: No chunks generated for Pinecone indexing")
-                return
-            
-            # Generate embeddings for chunks
-            chunk_texts = [chunk["text"] for chunk in chunks]
-            embeddings = embedding_service.embed(chunk_texts)
-            
-            # Index chunks in Pinecone
-            index_chunks_result = pinecone_service.index_file_chunks(
-                file_id=file_id,
-                file_name=source_filename,
-                chunks=chunks,
-                embeddings=embeddings
-            )
-            
-            if index_chunks_result.get("success"):
-                uploaded_file.indexing_status = "indexed"
-                db.commit()
-                print(f"[BACKGROUND INDEX] File {file_id} indexed successfully in Pinecone: {index_chunks_result.get('chunks_indexed', 0)} chunks")
-            else:
-                error_msg = index_chunks_result.get('error', 'Unknown error during Pinecone indexing')
-                uploaded_file.indexing_status = "error"
-                db.commit()
-                print(f"[BACKGROUND INDEX] File {file_id} indexing failed: {error_msg}")
-                print(f"[BACKGROUND INDEX] File {file_id} error details: {traceback.format_exc()}")
-            
-        except Exception as e:
-            # Update status to error if indexing fails
-            error_msg = str(e)
-            error_trace = traceback.format_exc()
-            print(f"[BACKGROUND INDEX] File {file_id} indexing exception: {error_msg}")
-            print(f"[BACKGROUND INDEX] File {file_id} exception traceback:\n{error_trace}")
-            
-            try:
-                uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
-                if uploaded_file:
-                    uploaded_file.indexing_status = "error"
-                    db.commit()
-            except Exception as db_error:
-                print(f"[BACKGROUND INDEX] Failed to update error status: {str(db_error)}")
-        finally:
-            db.close()
-    except Exception as e:
-        error_msg = str(e)
-        error_trace = traceback.format_exc()
-        print(f"[BACKGROUND INDEX] Critical error indexing file {file_id}: {error_msg}")
-        print(f"[BACKGROUND INDEX] Critical error traceback:\n{error_trace}")
-
 # Helper function to process a single file
 async def process_single_file(
     file: UploadFile,
@@ -1405,6 +1352,28 @@ async def process_single_file(
                 "error": f"Invalid file type. Supported formats: PDF, DOCX, TXT, XLSX. Got: {file_extension}",
                 "file_name": file.filename
             }
+        # Read content and calculate hash
+        file_content = await file.read()
+        current_hash = calculate_file_hash(file_content)
+        user_email = uploaded_by or "anonymous"
+
+# Gatekeeper check: reuse if still valid
+        existing_file = db.query(UploadedFile).filter(
+           UploadedFile.file_hash == current_hash,
+           UploadedFile.uploaded_by == user_email,
+           UploadedFile.expires_at > datetime.utcnow(),
+           UploadedFile.indexing_status == "indexed"  # ✅ REQUIRED
+        ).first()
+
+        if existing_file:
+           print(f"[REUSE] {user_email} re-uploaded {file.filename}. Skipping processing.")
+           return {
+                "success": True,
+                "file_id": existing_file.id,
+                "file_name": existing_file.file_name,
+                "status": "reused"
+                }
+
         
         # Create uploads directory if it doesn't exist
         upload_dir = Path("uploads")
@@ -1415,7 +1384,7 @@ async def process_single_file(
         file_path = upload_dir / unique_filename
         
         # Save file to disk
-        file_content = await file.read()
+        
         with open(file_path, "wb") as f:
             f.write(file_content)
         
@@ -1504,7 +1473,9 @@ async def process_single_file(
             uploaded_by=user_email,
             status="Processed",
             extracted_text=extracted_text,
-            indexing_status="pending_index"
+            indexing_status="pending_index",
+            file_hash=current_hash, # NEW 
+            expires_at=datetime.utcnow() + timedelta(days=20) # NEW
         )
         
         db.add(uploaded_file)
@@ -1677,17 +1648,24 @@ async def upload_from_drive(
     Downloads files from Google Drive using the provided token, then processes them 
     using the core file saving and indexing logic.
     """
+    # 1. Global Try-Except to catch critical server failures (imports, DB issues, etc.)
     try:
         files_to_process = request_data.files
         access_token = request_data.access_token
         uploaded_by = request_data.user_email
         
+        # Validate Input
         if not files_to_process or not access_token:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": "Missing file list or access token."}
+                content={
+                    "success": False,
+                    "error": "Missing file list or access token.",
+                    "total_files": 0
+                }
             )
             
+        results = []
         successful_files = []
         failed_files = []
         
@@ -1697,32 +1675,91 @@ async def upload_from_drive(
             file_id = file_info.get('id')
             file_name = file_info.get('name')
             mime_type = file_info.get('mimeType')
+            file_path = None
             
-            # Step 1: Download file content
-            download_result = download_drive_file_content(file_id, file_name, mime_type, access_token)
+            print(f"[DRIVE-UPLOAD] Processing file {idx}/{len(files_to_process)}: {file_name} (ID: {file_id})")
             
-            if not download_result["success"]:
-                failed_files.append({"success": False, "error": download_result["error"], "file_name": file_name})
+            # Step 1: Download file content from Google Drive
+            try:
+                download_result = download_drive_file_content(file_id, file_name, mime_type, access_token)
+            except Exception as e:
+                print(f"[DRIVE-UPLOAD] Download service crash for {file_name}: {str(e)}")
+                failed_files.append({"success": False, "error": "Download service failure", "file_name": file_name})
+                continue
+
+            if not download_result or not download_result.get("success"):
+                failed_files.append({
+                    "success": False, 
+                    "error": download_result.get("error", "Unknown download error"), 
+                    "file_name": file_name
+                })
                 continue
                 
             file_content_bytes = download_result["content"]
             final_file_name = download_result["final_file_name"]
             file_extension = download_result["file_type"]
             
-            # Step 2: Extract and Save
+            # Step 2: Local Processing and DB Storage
             try:
-                # Text Extraction logic
+                # Validate file extension
+                allowed_extensions = ['pdf', 'docx', 'txt', 'doc', 'xlsx', 'pptx', 'ppt', 'png', 'xls']
+                if file_extension not in allowed_extensions:
+                    failed_files.append({
+                        "success": False,
+                        "error": f"Unsupported file type: {file_extension}",
+                        "file_name": file_name
+                    })
+                    continue
+
+                # Ensure upload directory exists
+                upload_dir = Path("uploads")
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                
+                unique_filename = f"{uuid.uuid4()}_{final_file_name}"
+                file_path = upload_dir / unique_filename
+                
+                # Write to disk
+                with open(file_path, "wb") as f:
+                    f.write(file_content_bytes)
+                
+                # Text Extraction
                 extracted_text = ""
+                from services.pdf_service import pdf_service
+                from services.docx_extraction_helper import extract_text_with_hyperlinks_from_docx
+                
                 if file_extension == 'pdf':
                     result = pdf_service.extract_text_from_pdf(file_content_bytes)
-                    extracted_text = result['text'] if result['success'] else ""
+                    extracted_text = result['text'] if result['success'] else f"PDF extraction failed: {result.get('error')}"
+                    
                 elif file_extension in ['docx', 'doc']:
-                    extracted_text = extract_text_with_hyperlinks_from_docx(file_content_bytes)
-                
-                # Save to Database
+                    try:
+                        extracted_text = extract_text_with_hyperlinks_from_docx(file_content_bytes)
+                    except:
+                        from docx import Document
+                        doc = Document(io.BytesIO(file_content_bytes))
+                        extracted_text = "\n".join([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+                        
+                elif file_extension == 'txt':
+                    extracted_text = file_content_bytes.decode('utf-8', errors='ignore')
+                    
+                elif file_extension in ['xlsx', 'xls']:
+                    workbook = load_workbook(filename=io.BytesIO(file_content_bytes), data_only=True)
+                    lines = []
+                    for sheet in workbook.worksheets:
+                        lines.append(f"Sheet: {sheet.title}")
+                        for row in sheet.iter_rows(values_only=True):
+                            cells = [str(cell) for cell in row if cell is not None]
+                            if cells: lines.append("\t".join(cells))
+                    extracted_text = "\n".join(lines) if lines else "No text found in XLSX."
+                    
+                elif file_extension in ['pptx', 'ppt', 'png']:
+                    extracted_text = f"[{file_extension.upper()} file: {file_name}] - Extraction skipped."
+
+                # DB Commit
                 mandatory_file = MandatoryFile(
                     file_name=final_file_name,
                     file_type=file_extension,
+                    file_path=str(file_path),
                     file_content=file_content_bytes,
                     file_size=len(file_content_bytes),
                     uploaded_by=uploaded_by or "anonymous",
@@ -1745,29 +1782,45 @@ async def upload_from_drive(
                         uploaded_by=mandatory_file.uploaded_by,
                         uploaded_at=mandatory_file.uploaded_at
                     )
-                
-                successful_files.append({"success": True, "file_id": mandatory_file.id, "file_name": final_file_name})
+
+                successful_files.append({
+                    "success": True,
+                    "file_id": mandatory_file.id,
+                    "file_name": mandatory_file.file_name,
+                    "message": "File processed and saved successfully."
+                })
 
             except Exception as e:
                 db.rollback()
+                print(f"[DRIVE-UPLOAD] File processing error: {str(e)}")
+                if file_path and file_path.exists():
+                    file_path.unlink() # Cleanup file on failure
                 failed_files.append({"success": False, "error": str(e), "file_name": file_name})
-                
-        # Final Response
+
+        # Final Response Construction
+        results.extend(successful_files)
+        results.extend(failed_files)
+        
         return {
             "success": len(successful_files) > 0,
             "total_files": len(files_to_process),
             "successful_uploads": len(successful_files),
             "failed_uploads": len(failed_files),
-            "files": successful_files + failed_files
+            "files": results,
+            "message": f"Processed {len(files_to_process)} file(s)."
         }
 
     except Exception as e:
         import traceback
-        print(f"[CRITICAL ERROR] {str(e)}")
+        print(f"[CRITICAL-DRIVE-UPLOAD-ERROR] {str(e)}")
         print(traceback.format_exc())
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": f"Internal Server Error: {str(e)}"}
+            content={
+                "success": False,
+                "error": f"Critical server error: {str(e)}",
+                "total_files": 0
+            }
         )
             
 # --- END NEW: Google Drive Upload Endpoint ---
@@ -2125,100 +2178,96 @@ async def process_multi_files(
     Handles file ingestion for the chat session from Google Drive.
     Downloads, extracts text, saves to UploadedFile table, and indexes to Pinecone.
     """
-
-    # ---------- FIX 1: SAFE JSON READ (RENDER SAFE) ----------
     try:
-        raw_body = await request.body()
-        if not raw_body:
-            return JSONResponse(
-                status_code=400,
-                content={"success": False, "error": "Empty request body"}
-            )
-        body = json.loads(raw_body)
-    except Exception as e:
-        print(f"[PROCESS-MULTI-FILES] JSON error: {str(e)}")
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "error": "Invalid JSON body"}
-        )
-
-    try:
+        body = await request.json()
+    
         source = body.get("source")
         files_data = body.get("files", [])
         user_email = body.get("user_email", "anonymous")
-
-        # ---------- AUTH TOKEN ----------
+        
+        # Get the token sent from frontend for downloading
         auth_header = request.headers.get("Authorization")
         access_token = None
         if auth_header and auth_header.startswith("Bearer "):
             access_token = auth_header.split(" ")[1]
 
         if source != "google_drive" or not access_token:
-            return JSONResponse(
-                status_code=400,
-                content={"success": False, "error": "Invalid source or missing token"}
-            )
-
-        if not files_data:
-            return JSONResponse(
-                status_code=400,
-                content={"success": False, "error": "No files received"}
-            )
+            return JSONResponse(status_code=400, content={"success": False, "error": "Invalid source or missing token"})
 
         uploaded_file_ids = []
-
+        reused_file_ids = []
+        
         for file_info in files_data:
             file_name = file_info.get("name")
             drive_id = file_info.get("drive_file_id")
             mime_type = file_info.get("mime_type")
-
-            if not file_name or not drive_id:
-                continue
-
+            
             print(f"[CHAT-DRIVE] Processing: {file_name}")
 
-            # 1️⃣ Download from Drive
-            download_result = download_drive_file_content(
-                drive_id,
-                file_name,
-                mime_type,
-                access_token
-            )
-
-            if not download_result.get("success"):
+            # 1. Download content from Drive
+            download_result = download_drive_file_content(drive_id, file_name, mime_type, access_token)
+            if not download_result["success"]:
                 print(f"[CHAT-DRIVE] Download failed for {file_name}")
                 continue
-
+                
             file_content = download_result["content"]
             file_extension = download_result["file_type"]
             extracted_text = ""
+            
+           #current_hash = calculate_file_hash(file_content)
+            current_hash = f"drive::{drive_id}::{user_email}"
 
-            # 2️⃣ Extract text
+           
+            existing_file = db.query(UploadedFile).filter(
+                UploadedFile.file_hash == current_hash,
+                UploadedFile.uploaded_by == user_email,
+                UploadedFile.expires_at > datetime.utcnow(),
+                UploadedFile.indexing_status == "indexed"  # ✅ THIS IS THE FIX
+                
+            ).first()
+
+            
+            if existing_file:
+                uploaded_file_ids.append(existing_file.id) 
+                reused_file_ids.append(existing_file.id)
+                print(f"[REUSE-DRIVE] File {file_name} recognized. Reusing ID.")                
+                continue
+               
+            
+            # 2. Extract Text (Reusing your local upload logic)
             try:
-                if file_extension == "pdf":
+                if file_extension == 'pdf':
                     res = pdf_service.extract_text_from_pdf(file_content)
-                    if res.get("success"):
-                        extracted_text = res.get("text", "")
-                elif file_extension in ["docx", "doc"]:
+                    if res['success']: extracted_text = res['text']
+                elif file_extension in ['docx', 'doc']:
                     extracted_text = extract_text_with_hyperlinks_from_docx(file_content)
-                elif file_extension in ["xlsx", "xls"]:
-                    workbook = load_workbook(
-                        filename=io.BytesIO(file_content),
-                        data_only=True
-                    )
+                elif file_extension in ['xlsx', 'xls']:
+                    workbook = load_workbook(filename=io.BytesIO(file_content), data_only=True)
                     lines = []
                     for sheet in workbook.worksheets:
                         for row in sheet.iter_rows(values_only=True):
                             cells = [str(c) for c in row if c is not None]
-                            if cells:
-                                lines.append("\t".join(cells))
+                            if cells: lines.append("\t".join(cells))
                     extracted_text = "\n".join(lines)
-                elif file_extension == "txt":
-                    extracted_text = file_content.decode("utf-8", errors="ignore")
+                elif file_extension == 'txt':
+                    extracted_text = file_content.decode('utf-8', errors='ignore')
+                elif file_extension in ['pptx', 'ppt']:
+                    try:
+                        prs = Presentation(io.BytesIO(file_content))
+                        lines = []
+                        for slide in prs.slides:
+                            for shape in slide.shapes:
+                                if hasattr(shape, "text") and shape.text:
+                                    lines.append(shape.text)
+                        extracted_text = "\n".join(lines)
+                    except Exception as e:
+                        print(f"[CHAT-DRIVE] PPTX extraction error for {file_name}: {e}") 
+                        extracted_text = ""
+
             except Exception as e:
                 print(f"[CHAT-DRIVE] Extraction error for {file_name}: {str(e)}")
 
-            # 3️⃣ Save to DB
+            # 3. Save to UploadedFile table (This makes it "the same" as local upload)
             new_file = UploadedFile(
                 file_name=file_name,
                 file_type=file_extension,
@@ -2226,15 +2275,16 @@ async def process_multi_files(
                 uploaded_by=user_email,
                 status="Processed",
                 extracted_text=extracted_text,
-                indexing_status="pending_index"
+                indexing_status="pending_index",
+                file_hash=current_hash, # NEW 
+                expires_at=datetime.utcnow() + timedelta(days=20) # NEW
             )
-
             db.add(new_file)
             db.commit()
             db.refresh(new_file)
             uploaded_file_ids.append(new_file.id)
 
-            # 4️⃣ Background indexing
+            # 4. Queue for Pinecone Indexing (So chatbot can answer immediately)
             background_tasks.add_task(
                 index_file_background,
                 file_id=new_file.id,
@@ -2245,22 +2295,36 @@ async def process_multi_files(
                 uploaded_at=new_file.upload_time
             )
 
-        # ---------- FIX 2: ALWAYS RETURN JSON ----------
-        return JSONResponse(
-            status_code=200,
-            content={
+        
+        if reused_file_ids and len(uploaded_file_ids) == len(reused_file_ids):
+            return {
+                "success": True, 
+                "uploadedFileIds": uploaded_file_ids,
+                "message": "✅ File already exists. You can now ask questions directly.",
+                "status": "reused",  
+                "reusedFileIds": reused_file_ids
+             }
+        elif reused_file_ids:
+            #mixed case
+            return {
                 "success": True,
-                "uploaded_file_ids": uploaded_file_ids,
-                "message": f"Successfully processed {len(uploaded_file_ids)} files from Drive."
+                "uploadedFileIds": uploaded_file_ids, 
+                "message": "✅ Some files already existed. You can now ask questions directly.", 
+                "status": "mixed", 
+                "reusedFileIds": reused_file_ids
             }
-        )
+        else:
+            #all new
+            return { 
+                "success": True, 
+                "status": "new", 
+                "message": f"Successfully processed {len(uploaded_file_ids)} new files from Drive.", 
+                "uploadedFileIds": uploaded_file_ids,
+            }
 
     except Exception as e:
         print(f"[PROCESS-MULTI-FILES] Error: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
 @app.post("/api/ask-question")
@@ -2319,8 +2383,8 @@ async def ask_chatbot_question(
                 except:
                     print(f"[ASK-QUESTION] Mandatory file IDs (raw): {mandatory_file_ids}")
             print(f"[ASK-QUESTION] Question: {question[:200]}...")
+
         elif file_id:
-            # Use Pinecone vector search to retrieve relevant chunks
             uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
             if not uploaded_file:
                 return {
@@ -2328,63 +2392,30 @@ async def ask_chatbot_question(
                     "error": f"File with ID {file_id} not found.",
                     "chat_id": chat_id
                 }
-            
             print(f"[ASK-QUESTION] Document being used: {uploaded_file.file_name} (ID: {file_id})")
-            
-            # Check if file is indexed
-            if uploaded_file.indexing_status != "indexed":
-                # Fallback to full text if not indexed yet
-                if uploaded_file.extracted_text:
-                    context_text = uploaded_file.extracted_text
-                    print(f"[ASK-QUESTION] File {file_id} not indexed, using full text (length: {len(context_text)} characters)")
-                else:
-                    return {
-                        "success": False,
-                        "error": f"File {file_id} is not indexed and has no extracted text available.",
-                        "chat_id": chat_id
-                    }
+            print(f"[ASK-QUESTION] Querying Pinecone shared index for file_id {file_id}")
+            query_embedding = embedding_service.embed_query(question)
+            matches = pinecone_service.query_file_chunks(
+              query_embedding=query_embedding,
+              file_id=file_id,
+              top_k=5
+            )
+             # 3️⃣ Build context from Pinecone results
+            if matches:
+                chunk_texts = []
+                for match in matches:
+                    metadata = match.get("metadata", {})
+                    text = metadata.get("text", "")
+                    score = match.get("score", 0.0)
+                    chunk_texts.append(f"[Score: {score:.3f}]\n{text}")
+                context_text = "\n\n---\n\n".join(chunk_texts)
+                print(f"[ASK-QUESTION] Using Pinecone context ({len(matches)} chunks, length: {len(context_text)})")
             else:
-                # Use Pinecone vector search
-                print(f"[ASK-QUESTION] Using Pinecone search for file_id {file_id}")
+                print("[ASK-QUESTION] No Pinecone matches found, falling back to full text")
+                context_text = uploaded_file.extracted_text or ""
+
+        
                 
-                index_name = pinecone_service.get_index_name_for_file(file_id, uploaded_file.file_name)
-                if not pinecone_service.index_exists(index_name):
-                    print(f"[ASK-QUESTION] Pinecone index {index_name} not found. Falling back to full text.")
-                    if uploaded_file.extracted_text:
-                        context_text = uploaded_file.extracted_text
-                    else:
-                        context_text = ""
-                else:
-                    query_embedding = embedding_service.embed_query(question)
-                    search_result = pinecone_service.search_across_indexes(
-                        query_embedding=query_embedding,
-                        index_names=[index_name],
-                        top_k=5
-                    )
-                    
-                    results = search_result.get("results") if search_result.get("success") else []
-                    
-                    if results:
-                        chunk_texts = []
-                        for result in results:
-                            metadata = result.get("metadata", {})
-                            chunk_text = metadata.get("text", "")
-                            chunk_index = metadata.get("chunk_index", "?")
-                            file_name = metadata.get("file_name", uploaded_file.file_name)
-                            score = result.get("score", 0.0)
-                            chunk_texts.append(
-                                f"[Chunk {chunk_index} from {file_name} (score: {score:.3f})]\n{chunk_text}"
-                            )
-                        
-                        context_text = "\n\n---\n\n".join(chunk_texts)
-                        print(f"[ASK-QUESTION] Retrieved {len(results)} relevant Pinecone chunks (total length: {len(context_text)} characters)")
-                    else:
-                        if uploaded_file.extracted_text:
-                            context_text = uploaded_file.extracted_text
-                            print(f"[ASK-QUESTION] No Pinecone results, using full text (length: {len(context_text)} characters)")
-                        else:
-                            context_text = ""
-                            print(f"[ASK-QUESTION] No Pinecone results and no extracted text available")
         else:
             # No file_id or file_context provided - search Pinecone indexes for knowledge base files
             use_pinecone_search = True
@@ -3354,8 +3385,6 @@ async def get_default_workspace(db: Session = Depends(get_db)):
     except Exception as e:
         return {"success": False, "message": str(e)}
 
-
-
 async def generate_risk_assessment_pdf(risk_assessment_content: str, assessment_name: str):
     """Generate PDF from risk assessment content using ReportLab"""
     try:
@@ -3952,7 +3981,7 @@ def parse_html_table_for_pdf(table_html: str, styles):
 
 
 async def send_email_with_pdf_via_smtp(to_email: str, subject: str, body: str, from_email: str, pdf_content: bytes, sprint_plan_name: str):
-    """Fallback SMTP email sending with PDF attachment"""
+    
     try:
         import smtplib
         from email.mime.text import MIMEText
@@ -4017,9 +4046,12 @@ async def get_default_workspace(db: Session = Depends(get_db)):
     """Get the default EJM workspace"""
     try:
         from models import Workspace
+        
+        # Check if EJM workspace exists
         workspace = db.query(Workspace).filter(Workspace.name == "EJM").first()
         
         if not workspace:
+            # Create EJM workspace if it doesn't exist
             workspace = Workspace(
                 name="EJM",
                 description="Default EJM workspace",
@@ -4030,7 +4062,7 @@ async def get_default_workspace(db: Session = Depends(get_db)):
             db.refresh(workspace)
         
         return {
-            "success": True, 
+            "success": True,
             "workspace": {
                 "id": workspace.id,
                 "name": workspace.name,
@@ -4041,39 +4073,23 @@ async def get_default_workspace(db: Session = Depends(get_db)):
     except Exception as e:
         return {"success": False, "message": str(e)}
 
-# --- DATABASE STARTUP WITH RETRIES ---
-from sqlalchemy.exc import OperationalError
-import time
+    
+import asyncio
 
-@app.on_event("startup")
-def startup_event():
-    retries = 5
-    for attempt in range(retries):
+async def run_cleanup_loop():
+    """Background loop that runs the janitor every 24 hours."""
+    while True:
+        print("[BACKGROUND] Starting daily cleanup task...")
+        db = SessionLocal()
         try:
-            print(f"[STARTUP] DB init attempt {attempt + 1}")
-            
-            # Run migrations if the file exists
-            try:
-                from db_migrations import run_migrations
-                run_migrations()
-                print("[STARTUP] Migrations completed")
-            except ImportError:
-                print("[STARTUP] No migrations file found, skipping...")
-            
-            # Create tables
-            Base.metadata.create_all(bind=engine)
-            
-            print("[STARTUP] DB connected and tables verified successfully")
-            return
-        except OperationalError as e:
-            print(f"[STARTUP] DB not ready (Attempt {attempt+1}), retrying in 3s... Error: {e}")
-            time.sleep(3)
+            cleanup_expired_files(db)
+        finally:
+            db.close()
+        await asyncio.sleep(86400)  # 24 hours (in seconds)
 
-    print("[STARTUP] DB unavailable after retries, app will still run but DB features may fail")
+
 
 if __name__ == "__main__":
     import uvicorn
-    # Render uses the $PORT environment variable, uvicorn picks this up automatically 
-    # when run via command line, but for local testing:
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Use 0.0.0.0 to allow external connections on the same network
+    uvicorn.run(app, host="0.0.0.0", port=8000)
