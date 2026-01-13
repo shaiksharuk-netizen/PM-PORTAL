@@ -3489,27 +3489,14 @@ const pickerCallback = useCallback((data, userEmail) => {
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    window.open('https://weekly-tracker-backend.onrender.com', '_blank', 'noopener,noreferrer');
+                    window.open('https://weekly-tracker-frontend.onrender.com', '_blank', 'noopener,noreferrer');
                     
                   }}
 
-                  aria-label="Generate weekly stat report"
-                  title="Generate weekly stat report"
+                  aria-label="Generate weekly status report"
+                  title="Generate weekly status report"
                 >
                  <span>Generate weekly stat report</span> 
-                </button>
-                <button
-                  className="chat-start-project-btn"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.open('http://localhost:5174/', '_blank', 'noopener,noreferrer');
-                    
-                  }}
-                  aria-label="Genereate MOM Template"
-                  title="Generate MOM Template"
-                >
-                 <span>Generate MOM Template</span> 
                 </button>
               </div>
               <div className="chat-input-row">
