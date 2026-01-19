@@ -154,16 +154,14 @@ def _get_structured_html_system_prompt() -> str:
     )
 
 
-# Define exactly which URLs are allowed to talk to this backend
-origins = [
-    "https://pm-portal-3.onrender.com",
-    "https://pm-portal-2.onrender.com",
-    "http://localhost:3000",
-]
+from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "https://pm-portal-3.onrender.com",
+        "https://pm-portal-2.onrender.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
