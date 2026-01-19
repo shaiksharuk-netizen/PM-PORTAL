@@ -154,10 +154,16 @@ def _get_structured_html_system_prompt() -> str:
     )
 
 
-# CORS middleware
+# Define exactly which URLs are allowed to talk to this backend
+origins = [
+    "https://pm-portal-3.onrender.com",
+    "https://pm-portal-2.onrender.com",
+    "http://localhost:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://192.168.11.101:3000, *").split(","),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
