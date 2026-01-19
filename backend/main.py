@@ -2574,6 +2574,7 @@ Return ONLY the JSON object matching the schema specified in your instructions."
                     _save_chat_message(db, chat_id, "assistant", formatted_answer, user_email)
                     return {
                         "success": True,
+                        "answer": formatted_answer,
                         "response": formatted_answer,
                         "router_result": router_result,  # Include full router result for debugging
                         "status": status,
@@ -2673,6 +2674,7 @@ Please provide your answer:"""
             _save_chat_message(db, chat_id, "assistant", llm_response, user_email)
             return {
                 "success": True,
+                "answer": llm_response, 
                 "response": llm_response,
                 "file_id": file_id,
                 "chat_id": chat_id
@@ -2685,6 +2687,7 @@ Please provide your answer:"""
             return {
                 "success": False,
                 "error": assistant_error,
+                "answer": "",
                 "response": result.get('response', 'Failed to get response'),
                 "chat_id": chat_id
             }
