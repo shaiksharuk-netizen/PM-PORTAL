@@ -23,8 +23,16 @@ class EmbeddingService:
             try:
                 from sentence_transformers import SentenceTransformer
                 logger.info(f"Loading embedding model: {self.model_name}")
-                self._model = SentenceTransformer(self.model_name)
-                # Get embedding dimension
+
+                # --- CHANGE 1: Define a writable cache directory ---
+                cache_dir = "/tmp/sentence_transformers_cache"
+                os.makedirs(cache_dir, exist_ok=True)
+
+                # --- CHANGE 2: Tell the model to use this directory ---
+                # This prevents the .lock file error on restricted servers
+                self._model = SentenceTransformer(self.model_name, cache_folder=cache_dir)
+
+                # --- CHANGE 3: Get embedding dimension after model loads ---
                 self._embedding_dimension = self._model.get_sentence_embedding_dimension()
                 logger.info(f"Model loaded successfully. Embedding dimension: {self._embedding_dimension}")
             except ImportError:
@@ -144,4 +152,3 @@ class EmbeddingService:
 
 # Create service instance
 embedding_service = EmbeddingService()
-
