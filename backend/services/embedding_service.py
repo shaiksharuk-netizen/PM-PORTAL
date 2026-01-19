@@ -25,7 +25,7 @@ class EmbeddingService:
                 logger.info(f"Loading embedding model: {self.model_name}")
 
                 # --- CHANGE 1: Define a writable cache directory ---
-                cache_dir = "/tmp/sentence_transformers_cache"
+                cache_dir = os.path.join(os.getcwd(), "model_cache")               
                 os.makedirs(cache_dir, exist_ok=True)
 
                 # --- CHANGE 2: Tell the model to use this directory ---
