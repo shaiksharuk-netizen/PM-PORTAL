@@ -3070,7 +3070,7 @@ body, html {
 /* Collapse Button - Always at the same position */
 .chat-history-collapse-btn {
   position: absolute;
-  top: 20px;
+  top: 75px;
   right: -18px;
   width: 36px;
   height: 36px;
