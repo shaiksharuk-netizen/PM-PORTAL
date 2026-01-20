@@ -4,7 +4,7 @@ Provides text embeddings using local sentence-transformers or hosted providers.
 """
 import os
 import gc  # Crucial for clearing memory on Render
-from typing import List, Dict, Any, Optional
+from typing import List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,31 +13,36 @@ class EmbeddingService:
     """Service for generating text embeddings"""
     
     def __init__(self):
-        # ALIGNED: Kept your original variable names
         self.provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
         self.model_name = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
         self._model = None
         self._embedding_dimension = None
         
     def _load_local_model(self):
-        """LITE MODE: Lazy load with 16-bit precision to save 50% RAM"""
+        """LITE MODE: Load model in CPU-safe FP32"""
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                import torch # Required for float16 optimization
-                
-                # FORCE CPU: GPU drivers on Render consume too much RAM
+                import torch
+
+                # FORCE CPU
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 os.environ["TORCH_NUM_THREADS"] = "1"
                 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-                logger.info(f"Loading local model: {self.model_name} in Lite Mode...")
+                device = "cuda" if torch.cuda.is_available() else "cpu"
 
-                # OPTIMIZATION: Load model with FP16 precision
+                logger.info(f"Loading local model: {self.model_name} on {device}...")
+
+                # ⚡ FIXED: Always use FP32
                 self._model = SentenceTransformer(
                     self.model_name,
-                    model_kwargs={"torch_dtype": torch.float16}
+                    device=device
                 )
+
+                # Force float32 on CPU (prevents Half precision errors)
+                if device == "cpu":
+                    self._model = self._model.float()
 
                 self._embedding_dimension = self._model.get_sentence_embedding_dimension()
                 logger.info(f"Model loaded successfully. Dimension: {self._embedding_dimension}")
@@ -46,7 +51,6 @@ class EmbeddingService:
                 raise
 
     def _embed_with_openai(self, texts: List[str]) -> List[List[float]]:
-        """ALIGNED: Your original OpenAI functionality"""
         try:
             from openai import OpenAI
             api_key = os.getenv("OPENAI_API_KEY")
@@ -61,7 +65,6 @@ class EmbeddingService:
             raise
 
     def _embed_with_vertex(self, texts: List[str]) -> List[List[float]]:
-        """ALIGNED: Your original Vertex AI functionality"""
         try:
             from google.cloud import aiplatform
             from vertexai.language_models import TextEmbeddingModel
@@ -77,18 +80,15 @@ class EmbeddingService:
             raise
 
     def embed(self, texts: List[str]) -> List[List[float]]:
-        """Main method: Process in small batches to prevent RAM spikes"""
         if not texts:
             return []
-        
         try:
             if self.provider == "local":
                 self._load_local_model()
-                # OPTIMIZATION: Batch size of 4 stops memory wall crash
                 embeddings = self._model.encode(
-                    texts, 
-                    convert_to_numpy=True, 
-                    batch_size=4, 
+                    texts,
+                    convert_to_numpy=True,
+                    batch_size=4,
                     show_progress_bar=False
                 )
                 return embeddings.tolist()
@@ -99,16 +99,13 @@ class EmbeddingService:
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
         finally:
-            # CRITICAL: Manual garbage collection clears RAM immediately
             gc.collect()
 
     def embed_query(self, query: str) -> List[float]:
-        """ALIGNED: Your original embed_query functionality"""
         embeddings = self.embed([query])
         return embeddings[0] if embeddings else []
     
     def get_embedding_dimension(self) -> int:
-        """ALIGNED: Your original dimension getter"""
         if self.provider == "local":
             self._load_local_model()
             return self._embedding_dimension
