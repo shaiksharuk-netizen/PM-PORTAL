@@ -153,14 +153,17 @@ def _get_structured_html_system_prompt() -> str:
         "Now, based on the uploaded document, answer the user’s question clearly and in this structured HTML format."
     )
 
-
 from fastapi.middleware.cors import CORSMiddleware
 
+# PINPOINT FIX: Added all required domains to stop CORS errors
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://pm-portal-3.onrender.com",
-        "https://pm-portal-2.onrender.com"
+        "https://pm-portal-2.onrender.com",
+        "https://landingpage-awaf.onrender.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
     ],
     allow_credentials=True,
     allow_methods=["*"],
