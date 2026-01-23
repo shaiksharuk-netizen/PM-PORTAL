@@ -14,16 +14,17 @@ const GoogleCallback = () => {
     const handleGoogleCallback = async () => {
       try {
 
-        const urlParams = new URLSearchParams(location.search);
-        const code = urlParams.get('code');
-        const error = urlParams.get('error');
-        
         // If user is already authenticated, redirect to home
-        if (isAuthenticated && !code) {
+        if (isAuthenticated) {
           console.log(isAuthenticated)
           navigate('/home');
           return;
         }
+        
+        const urlParams = new URLSearchParams(location.search);
+        const code = urlParams.get('code');
+        const error = urlParams.get('error');
+        
 
 
         if (error) {
