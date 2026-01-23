@@ -13,15 +13,18 @@ const GoogleCallback = () => {
   useEffect(() => {
     const handleGoogleCallback = async () => {
       try {
-        // If user is already authenticated, redirect to home
-        if (isAuthenticated) {
-          navigate('/home');
-          return;
-        }
 
         const urlParams = new URLSearchParams(location.search);
         const code = urlParams.get('code');
         const error = urlParams.get('error');
+        
+        // If user is already authenticated, redirect to home
+        if (isAuthenticated && !code) {
+          console.log(isAuthenticated)
+          navigate('/home');
+          return;
+        }
+
 
         if (error) {
           setError('Google OAuth was cancelled or failed.');
