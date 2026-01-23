@@ -142,7 +142,7 @@ const LandingPage = () => {
     return (
       <div className="landing-page">
         <div className="main-content" style={{ textAlign: 'center' }}>
-          <p>Loading...</p>
+          <p>Loading....</p>
         </div>
       </div>
     );
