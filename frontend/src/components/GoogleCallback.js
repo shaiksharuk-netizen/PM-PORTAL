@@ -14,9 +14,13 @@ const GoogleCallback = () => {
     const handleGoogleCallback = async () => {
       try {
 
+        console.log('[GoogleCallback] Component mounted, starting auth flow...');
+        console.log('[GoogleCallback] isAuthenticated:', isAuthenticated);
+        console.log('[GoogleCallback] location.search:', location.search);
+        console.log('[GoogleCallback] REACT_APP_API_URL:', process.env.REACT_APP_API_URL);
         // If user is already authenticated, redirect to home
         if (isAuthenticated) {
-          console.log(isAuthenticated)
+          console.log('[GoogleCallback] User already authenticated, redirecting to /home');
           navigate('/home');
           return;
         }
@@ -37,9 +41,13 @@ const GoogleCallback = () => {
           return;
         }
 
+        console.log('[GoogleCallback] Sending code to backend:', `${process.env.REACT_APP_API_URL}/api/auth/google/callback`);
         const response = await axios.post(`${process.env.REACT_APP_API_URL}/api/auth/google/callback`, { code });
 
         if (response.data.success) {
+          console.log('[GoogleCallback] Authentication successful!');
+          console.log('[GoogleCallback] User:', response.data.user);
+          console.log('[GoogleCallback] Session ID:', response.data.session_id);
           // Clear any existing workspace selection on Google login
           localStorage.removeItem('selectedWorkspace');
           // Clear chatbot session flags to ensure it shows on new login
@@ -52,6 +60,7 @@ const GoogleCallback = () => {
           localStorage.setItem('sessionId', response.data.session_id);
           
           // Clear the URL parameters to prevent back button issues
+          console.log('[GoogleCallback] Redirecting to /home');
           window.history.replaceState({}, document.title, '/callback');
           navigate('/home');
         } else {
