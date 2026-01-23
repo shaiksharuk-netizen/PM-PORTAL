@@ -949,7 +949,7 @@ async def reindex_all_knowledge_base_files(db: Session = Depends(get_db)):
 async def get_google_auth_url(prompt: str = None):
     """Get Google OAuth URL"""
     try:
-        print(f"[AUTH] Generating Google OAuth URL...")
+        print(f"[AUTH] Generating Google OAuth URL..")
         print(f"[AUTH] GOOGLE_CLIENT_ID: {'Set' if os.getenv('GOOGLE_CLIENT_ID') else 'NOT SET'}")
         print(f"[AUTH] GOOGLE_REDIRECT_URI: {os.getenv('GOOGLE_REDIRECT_URI', 'NOT SET')}")
         auth_url = auth_service.get_google_auth_url(prompt=prompt)
