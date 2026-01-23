@@ -161,6 +161,8 @@ app.add_middleware(
     allow_origins=[
         "https://pm-portal-3.onrender.com",
         "https://pm-portal-2.onrender.com",
+        "https://pm-portal-frontend.onrender.com",
+        "https://pm-portal-yh13.onrender.com",
         "https://landingpage-awaf.onrender.com",
         "http://localhost:3000",
         "http://127.0.0.1:3000"
