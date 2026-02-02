@@ -5928,3 +5928,21 @@ iframe[src*="picker"] {
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 10.5L12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-10.5z'/%3E%3C/svg%3E") no-repeat center;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 10.5L12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-10.5z'/%3E%3C/svg%3E") no-repeat center;
 }
+
+/* Make sure the delete button is visible on the right */
+.chat-history-item {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+}
+
+/* Hide the icon until you move your mouse over the chat entry */
+.chat-item-delete-btn {
+    visibility: hidden;
+    opacity: 0;
+}
+
+.chat-history-item:hover .chat-item-delete-btn {
+    visibility: visible;
+    opacity: 1;
+}
