@@ -3260,6 +3260,7 @@ const pickerCallback = useCallback((data, userEmail) => {
                 ) : null}
                 
                 {/* Chats List Section */}
+          {/* Chats List Section */}
             <div className="chat-history-middle-section">
               <div className="chat-history-header">
                 <h3>Chats</h3>
@@ -3296,20 +3297,18 @@ const pickerCallback = useCallback((data, userEmail) => {
                         key={session.chat_id}
                         className={`chat-history-item ${activeChatId === session.chat_id ? 'active' : ''}`}
                         onClick={() => {
-                          if (session.chat_id === activeChatId && session.isLocal) {
-                            return;
-                          }
+                          if (session.chat_id === activeChatId && session.isLocal) return;
                           setCurrentProject(null);
                           setActiveProjectId(null);
                           setActiveConversationId(null);
                           loadChatHistory(session.chat_id);
                         }}
                         style={{ 
-                          display: 'flex', 
-                          justifyContent: 'space-between', 
-                          alignItems: 'center', 
-                          width: '100%',
-                          paddingRight: '10px' 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            width: '100%',
+                            paddingRight: '10px' 
                         }}
                       >
                         <div className="chat-history-item-content" style={{ flex: 1, overflow: 'hidden' }}>
@@ -3323,37 +3322,37 @@ const pickerCallback = useCallback((data, userEmail) => {
                           )}
                         </div>
 
-                        {/* --- DELETE BUTTON START --- */}
                         <button 
-                          className="chat-item-delete-btn" 
-                          onClick={(e) => handleDeleteChat(e, session.chat_id)}
-                          title="Delete history"
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#ff4d4d',
-                            cursor: 'pointer',
-                            padding: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            opacity: 0.8
-                          }}
-                        >
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M3 6h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                            <rect x="5" y="6" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="2"/>
-                            <path d="M9 10v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                            <path d="M15 10v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                            <rect x="9" y="2" width="6" height="4" rx="1" stroke="currentColor" strokeWidth="2"/>
-                          </svg>
+                            className="chat-item-delete-btn" 
+                            onClick={(e) => handleDeleteChat(e, session.chat_id)}
+                            title="Delete history"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#ff4d4d',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              opacity: 0.9,
+                              zIndex: 10
+                            }}
+                          >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M3 6h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                              <rect x="5" y="6" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="2"/>
+                              <path d="M9 10v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                              <path d="M15 10v6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                              <rect x="9" y="2" width="6" height="4" rx="1" stroke="currentColor" strokeWidth="2"/>
+                            </svg>
                         </button>
-                        {/* --- DELETE BUTTON END --- */}
                       </div>
                     );
                   })
                 )}
               </div>
             </div>
+          </div> {/* This closing div was missing and caused the Render error */}
               {/* Chat Content Area */}
               <div className="chat-expanded-content" style={{ flex: 1 }}>
                 {/* Project Header - Show only when project is active and no messages yet */}
