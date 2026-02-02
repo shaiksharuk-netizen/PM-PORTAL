@@ -9,7 +9,14 @@ class GeminiService:
         self.api_keys = [
             os.getenv("GEMINI_API_KEY_1"),      # Primary API key
             os.getenv("GEMINI_API_KEY_2"),      # Secondary API key  
-            os.getenv("GEMINI_API_KEY_3")       # Tertiary API key
+            os.getenv("GEMINI_API_KEY_3"),      # Tertiary API key
+            os.getenv("GEMINI_API_KEY_4"),
+            os.getenv("GEMINI_API_KEY_5"),
+            os.getenv("GEMINI_API_KEY_6"),
+            os.getenv("GEMINI_API_KEY_7"),
+            os.getenv("GEMINI_API_KEY_8"),
+            os.getenv("GEMINI_API_KEY_9"),
+            os.getenv("GEMINI_API_KEY_10"),
         ]
         
         # Add legacy support for GEMINI_API_KEY if no numbered keys are set
