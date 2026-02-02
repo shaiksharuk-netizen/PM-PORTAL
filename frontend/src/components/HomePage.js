@@ -1862,7 +1862,7 @@ const pickerCallback = useCallback((data, userEmail) => {
                 file =>
                   file.file_name?.toLowerCase().includes(
                     'project management playbook'
-                  ) && file.extracted_text
+                  )
                 );
 
                   if (!pmPlaybookFile) {
