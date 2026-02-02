@@ -3496,7 +3496,7 @@ const pickerCallback = useCallback((data, userEmail) => {
                   aria-label="Generate weekly status report"
                   title="Generate weekly status report"
                 >
-                 <span>Generate weekly stat report</span> 
+                 <span>Generate weekly status report</span> 
                 </button>
               </div>
               <div className="chat-input-row">
