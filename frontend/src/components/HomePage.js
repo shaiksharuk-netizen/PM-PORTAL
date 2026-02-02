@@ -927,6 +927,27 @@ const pickerCallback = useCallback((data, userEmail) => {
     }
   }, []);
 
+  // --- DELETE FUNCTION (Stand-alone) ---
+  const handleDeleteChat = async (e, chatIdToDelete) => {
+    e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this chat history?")) return;
+    try {
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/chat/${chatIdToDelete}`, { method: 'DELETE' });
+      if (response.ok) {
+        setChatSessions(prev => prev.filter(s => s.chat_id !== chatIdToDelete));
+        if (activeChatId === chatIdToDelete) {
+          setChatMessages([]);
+          setActiveChatPreview('');
+          setChatId(createChatId());
+        }
+        setToastMessage("Chat deleted");
+        setToastVisible(true);
+        setTimeout(() => setToastVisible(false), 2000);
+      }
+    } catch (error) { console.error("Error:", error); }
+  };
+
   const handleNewChat = useCallback(async () => {
     // Reset projects view
     setShowProjectsView(false);
