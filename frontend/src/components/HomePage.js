@@ -1813,7 +1813,11 @@ const pickerCallback = useCallback((data, userEmail) => {
     
     try {
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-      const question = "As a PM of new project, what steps you recommend ?";
+      // const question = "As a PM of new project, what steps you recommend ?";
+      const question =
+      moduleName === 'PM Template'
+        ? 'As a PM of new project, what steps you recommend ?'
+        : `I am a new Project Manager.Based on the Project Management Playbook, explain how to start and run a project.Cover project phases, PM responsibilities, and key deliverables concisely.`;
       
       // Step 1: Get all marked files for project use, or use all mandatory files as default
       let markedFileIds = Array.from(filesMarkedForProject);
@@ -1854,9 +1858,22 @@ const pickerCallback = useCallback((data, userEmail) => {
             const filesData = await filesResponse.json();
             if (filesData.success && Array.isArray(filesData.files) && filesData.files.length > 0) {
               // Use all active mandatory files as default playbook
-              markedFileIds = filesData.files
-                .filter(file => file.id && file.is_active !== false)
-                .map(file => file.id);
+              const pmPlaybookFile = filesData.files.find(
+                file =>
+                  file.file_name?.toLowerCase().includes(
+                    'project management playbook'
+                  ) && file.extracted_text
+                );
+
+                  if (!pmPlaybookFile) {
+                    throw new Error(
+                      'Project Management Playbook not found or not processed'
+                    );
+                  }
+                markedFileIds = [pmPlaybookFile.id];  
+              // markedFileIds = filesData.files
+              //   .filter(file => file.id && file.is_active !== false)
+              //   .map(file => file.id);
               
               console.log('📚 Using default playbook with', markedFileIds.length, 'file(s)');
             }
@@ -3514,14 +3531,14 @@ const pickerCallback = useCallback((data, userEmail) => {
                 >
                   <span>Start a Project</span>
                 </button>
-                <button
+               {/* <button
                   className="chat-start-project-btn"
                   onClick={(e) => handleStartProject(e, 'PM Template')}
                   aria-label="PM Template"
                   title="PM Template"
                 >
                   <span>PM Template</span>
-                </button>
+                </button> */}
                 <button
                   className="chat-start-project-btn"
                   onClick={(e) => {
