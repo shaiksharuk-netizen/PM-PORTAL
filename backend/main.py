@@ -2920,6 +2920,40 @@ async def get_chat_messages(chat_id: str, user_email: str = None, db: Session = 
         }
 
 
+# --- PINPOINT FIX: NEW ENDPOINT TO DELETE CHAT HISTORY ---
+
+@app.delete("/api/chat/{chat_id}")
+async def delete_chat_session(chat_id: str, db: Session = Depends(get_db)):
+    """Permanently delete a chat session and all its messages from the database."""
+    try:
+        # 1. Search for the conversation using the chat_id
+        conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
+        
+        # 2. If it doesn't exist, return a 404 error
+        if not conversation:
+            print(f"[DELETE] Chat ID {chat_id} not found.")
+            return JSONResponse(
+                status_code=404, 
+                content={"success": False, "message": "Chat history not found."}
+            )
+        
+        # 3. Delete the record and commit the change to the database
+        db.delete(conversation)
+        db.commit()
+        
+        print(f"[DELETE] Successfully deleted Chat ID: {chat_id}")
+        return {"success": True, "message": "Chat history deleted successfully."}
+        
+    except Exception as e:
+        # Rollback in case of database errors
+        db.rollback()
+        print(f"[DELETE ERROR] {str(e)}")
+        return JSONResponse(
+            status_code=500, 
+            content={"success": False, "error": str(e)}
+        )
+
+
 @app.post("/api/chat/save-message")
 async def save_chat_message(
     chat_id: str = Form(...),
