@@ -3529,7 +3529,7 @@ const pickerCallback = useCallback((data, userEmail) => {
                   aria-label="Start a Project"
                   title="Start a Project"
                 >
-                  <span>Start a Project</span>
+                  <span>PM Guide- Start project</span>
                 </button>
                {/* <button
                   className="chat-start-project-btn"
